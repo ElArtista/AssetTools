@@ -33,7 +33,7 @@ def yaml_loader_get_event_wrapper(self):
     global anchor_list
     ev = yaml_default_get_event_fn(self)
     if isinstance(ev, yaml.CollectionStartEvent) and ev.anchor is not None:
-        anchor_list.append(ev.anchor)
+        anchor_list.append(int(ev.anchor))
     return ev
 def yaml_load_all_with_document_anchors(stream, Loader=yaml.Loader):
     global anchor_list
