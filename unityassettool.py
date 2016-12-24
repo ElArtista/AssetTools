@@ -21,6 +21,27 @@ yaml.add_multi_constructor("tag:unity3d.com,2011:", unity_yaml_constructor)
 # Add it to the Loader's default (from language spec) list so it always resolves
 yaml.Loader.DEFAULT_TAGS[u'!u!'] = "tag:unity3d.com,2011:"
 
+# HACK: Unity yaml files misuse anchor functionality. Each unity yaml document
+# is marked with an anchor that is never dereferrenced according to the yaml specification
+# but is actually used by some "fileID" attributes in various objects.
+# We wrap some parser functions to populate an anchor list in order to have access to this
+# data that are by default discarded/processed by the yaml parser.
+yaml_default_load_all_fn = yaml.load_all
+yaml_default_get_event_fn = yaml.Loader.get_event
+anchor_list = []
+def yaml_loader_get_event_wrapper(self):
+    global anchor_list
+    ev = yaml_default_get_event_fn(self)
+    if isinstance(ev, yaml.CollectionStartEvent) and ev.anchor is not None:
+        anchor_list.append(ev.anchor)
+    return ev
+def yaml_load_all_with_document_anchors(stream, Loader=yaml.Loader):
+    global anchor_list
+    anchor_list = []
+    return (yaml_default_load_all_fn(stream, Loader), anchor_list)
+yaml.load_all = yaml_load_all_with_document_anchors
+yaml.Loader.get_event = yaml_loader_get_event_wrapper
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("proj_dir", help="path to unity project folder")
@@ -57,7 +78,8 @@ def prefab_from_file(f):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
         if yamlfdata:
-            metadicts = list(yaml.load_all(yamlfdata))
+            yparsed_data, anchors = yaml.load_all(yamlfdata)
+            metadicts = list(yparsed_data)
             # TODO!! Support prefabs with multiple meshes
             if "MeshRenderer" in metadicts[2]:
                 mat_guids = []
@@ -74,14 +96,14 @@ def scene_from_file(f):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
         if yamlfdata:
-            metadicts = list(yaml.load_all(yamlfdata))
+            yparsed_data, anchors = yaml.load_all(yamlfdata)
             scene = {}
             scene["objects"] = {}
-            for md in metadicts:
+            for idx, md in enumerate(yparsed_data):
                 if "GameObject" in md:
                     go = md["GameObject"]
                     obj_name = go["m_Name"]
-                    scene["objects"][obj_name] = {}
+                    scene["objects"][obj_name] = { "id": anchor_list[idx] }
             return scene
     return None
 
