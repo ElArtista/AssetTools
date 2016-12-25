@@ -51,7 +51,7 @@ def guid_from_meta_file(f):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
         if yamlfdata:
-            metadict = yaml.load(yamlfdata)
+            metadict = yaml.load(yamlfdata, Loader=yaml.CLoader)
             guid = metadict["guid"]
             return guid
     return None
