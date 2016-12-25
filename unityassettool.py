@@ -99,11 +99,29 @@ def scene_from_file(f):
             yparsed_data, anchors = yaml.load_all(yamlfdata)
             scene = {}
             scene["objects"] = {}
-            for idx, md in enumerate(yparsed_data):
+            metadicts = list(yparsed_data)
+            # Populate full game object list first
+            for idx, md in enumerate(metadicts):
                 if "GameObject" in md:
                     go = md["GameObject"]
-                    obj_name = go["m_Name"]
-                    scene["objects"][obj_name] = { "id": anchor_list[idx] }
+                    obj_id = anchor_list[idx]
+                    scene["objects"][obj_id] = {}
+                    obj = scene["objects"][obj_id]
+                    obj["name"] = go["m_Name"]
+                    # Set prefab relation
+                    if go["m_PrefabParentObject"]["fileID"] != 0:
+                        obj["prefab"] = go["m_PrefabParentObject"]["guid"]
+            # Populate full game objects with data
+            for idx, md in enumerate(metadicts):
+                if "Transform" in md:
+                    component = md["Transform"]
+                    goid = component["m_GameObject"]["fileID"]
+                    trans = {
+                        "position" : component["m_LocalPosition"],
+                        "rotation" : component["m_LocalRotation"],
+                        "scale"    : component["m_LocalScale"]
+                    }
+                    scene["objects"][goid]["transform"] = trans
             return scene
     return None
 
@@ -164,7 +182,7 @@ def construct_json_output(assetmap):
     data["materials"] = assetmap["material"]
     data["textures"] = assetmap["texture"]
     data["models"] = assetmap["model"]
-    #data["prefabs"] = assetmap["prefab"]
+    data["prefabs"] = assetmap["prefab"]
     data["scenes"] = assetmap["scene"]
     return json.dumps(data, indent=4)
 
