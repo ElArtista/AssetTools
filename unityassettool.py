@@ -168,18 +168,22 @@ def construct_json_output(assetmap):
     data["scenes"] = assetmap["scene"]
     return json.dumps(data, indent=4)
 
+
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
 def main():
     args = parse_args()
     asset_dir = os.path.join(args.proj_dir, "Assets")
     if not os.path.exists(asset_dir):
-        print("Error: could not locate \"Assets\" directory, are you using a valid unity project path?")
+        eprint("Error: could not locate \"Assets\" directory, are you using a valid unity project path?")
         return
 
     # Scan .meta files and construct map with guids to filepaths
     clear_line = 128 * " " + "\r"
-    report_fn = lambda f: print(clear_line + "[+] Parsing metadata file: %s" % (f), end='\r')
+    report_fn = lambda f: eprint(clear_line + "[+] Parsing metadata file: %s" % (f), end='\r')
     guidmap = scan_meta_files(asset_dir, report_fn)
-    print(clear_line + "[+] Parsing metadata files done.")
+    eprint(clear_line + "[+] Parsing metadata files done.")
     # Create inverse map
     inv_map = {v: k for k, v in guidmap.items()}
 
@@ -187,12 +191,12 @@ def main():
     assetscanners = [scan_materials, scan_textures, scan_models, scan_prefabs, scan_scenes]
     assetmap = {}
     for at in assettypes:
-        report_fn = lambda f: print(clear_line + "[+] Processing %s file: %s" % (at, f), end='\r')
+        report_fn = lambda f: eprint(clear_line + "[+] Processing %s file: %s" % (at, f), end='\r')
         idx = assettypes.index(at)
         assetmap[at] = assetscanners[idx](asset_dir, inv_map, report_fn)
-        print(clear_line + "[+] Processing %s files done." % (at))
+        eprint(clear_line + "[+] Processing %s files done." % (at))
 
-    print("[+] Generating json output...")
+    eprint("[+] Generating json output...")
     json_out = construct_json_output(assetmap)
     print(json_out)
 
