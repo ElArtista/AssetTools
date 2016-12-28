@@ -44,7 +44,7 @@ yaml.Loader.get_event = yaml_loader_get_event_wrapper
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("proj_dir", help="path to unity project folder")
+    parser.add_argument("search_dir", help="folder to recursively search for assets")
     return parser.parse_args()
 
 def guid_from_meta_file(f):
@@ -191,16 +191,14 @@ def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 def main():
+    # Search directory
     args = parse_args()
-    asset_dir = os.path.join(args.proj_dir, "Assets")
-    if not os.path.exists(asset_dir):
-        eprint("Error: could not locate \"Assets\" directory, are you using a valid unity project path?")
-        return
+    search_dir = args.search_dir
 
     # Scan .meta files and construct map with guids to filepaths
     clear_line = 128 * " " + "\r"
     report_fn = lambda f: eprint(clear_line + "[+] Parsing metadata file: %s" % (f), end='\r')
-    guidmap = scan_meta_files(asset_dir, report_fn)
+    guidmap = scan_meta_files(search_dir, report_fn)
     eprint(clear_line + "[+] Parsing metadata files done.")
     # Create inverse map
     inv_map = {v: k for k, v in guidmap.items()}
@@ -211,7 +209,7 @@ def main():
     for at in assettypes:
         report_fn = lambda f: eprint(clear_line + "[+] Processing %s file: %s" % (at, f), end='\r')
         idx = assettypes.index(at)
-        assetmap[at] = assetscanners[idx](asset_dir, inv_map, report_fn)
+        assetmap[at] = assetscanners[idx](search_dir, inv_map, report_fn)
         eprint(clear_line + "[+] Processing %s files done." % (at))
 
     eprint("[+] Generating json output...")
