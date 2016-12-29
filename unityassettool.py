@@ -116,10 +116,13 @@ def scene_from_file(f):
                 if "Transform" in md:
                     component = md["Transform"]
                     goid = component["m_GameObject"]["fileID"]
+                    pc = component["m_LocalPosition"]
+                    rc = component["m_LocalRotation"]
+                    sc = component["m_LocalScale"]
                     trans = {
-                        "position" : component["m_LocalPosition"],
-                        "rotation" : component["m_LocalRotation"],
-                        "scale"    : component["m_LocalScale"]
+                        "position" : [pc["x"], pc["y"], pc["z"]],
+                        "rotation" : [rc["x"], rc["y"], rc["z"], rc["w"]],
+                        "scale"    : [sc["x"], sc["y"], sc["z"]]
                     }
                     scene["objects"][goid]["transform"] = trans
             return scene
