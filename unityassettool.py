@@ -112,6 +112,7 @@ def scene_from_file(f):
                     if go["m_PrefabParentObject"]["fileID"] != 0:
                         obj["prefab"] = go["m_PrefabParentObject"]["guid"]
             # Populate full game objects with data
+            transform_owner = {}
             for idx, md in enumerate(metadicts):
                 if "Transform" in md:
                     component = md["Transform"]
@@ -125,6 +126,17 @@ def scene_from_file(f):
                         "scale"    : [sc["x"], sc["y"], sc["z"]]
                     }
                     scene["objects"][goid]["transform"] = trans
+                    # Store parent game object id for later use
+                    transform_owner[anchors[idx]] = goid
+            # Create relations
+            for idx, md in enumerate(metadicts):
+                if "Transform" in md:
+                    component = md["Transform"]
+                    goid = component["m_GameObject"]["fileID"]
+                    parnt_trans = component["m_Father"]["fileID"]
+                    if parnt_trans != 0:
+                            parnt = transform_owner[parnt_trans]
+                            scene["objects"][goid]["transform"]["parent"] = str(parnt)
             return scene
     return None
 
