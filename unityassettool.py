@@ -104,7 +104,7 @@ def scene_from_file(f):
             for idx, md in enumerate(metadicts):
                 if "GameObject" in md:
                     go = md["GameObject"]
-                    obj_id = anchor_list[idx]
+                    obj_id = anchors[idx]
                     scene["objects"][obj_id] = {}
                     obj = scene["objects"][obj_id]
                     obj["name"] = go["m_Name"]
