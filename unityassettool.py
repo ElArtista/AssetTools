@@ -200,7 +200,7 @@ def construct_json_output(assetmap):
     data["models"] = assetmap["model"]
     data["prefabs"] = assetmap["prefab"]
     data["scenes"] = assetmap["scene"]
-    return json.dumps(data, indent=4)
+    return json.dumps(data, indent=4, sort_keys=True)
 
 
 def eprint(*args, **kwargs):
