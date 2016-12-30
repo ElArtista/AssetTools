@@ -120,9 +120,10 @@ def scene_from_file(f):
                     pc = component["m_LocalPosition"]
                     rc = component["m_LocalRotation"]
                     sc = component["m_LocalScale"]
+                    # NOTE: Converting handness
                     trans = {
-                        "position" : [pc["x"], pc["y"], pc["z"]],
-                        "rotation" : [rc["x"], rc["y"], rc["z"], rc["w"]],
+                        "position" : [-pc["x"], pc["y"], pc["z"]],
+                        "rotation" : [rc["x"], -rc["y"], -rc["z"], rc["w"]],
                         "scale"    : [sc["x"], sc["y"], sc["z"]]
                     }
                     scene["objects"][goid]["transform"] = trans
