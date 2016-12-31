@@ -80,16 +80,24 @@ def prefab_from_file(f):
         if yamlfdata:
             yparsed_data, anchors = yaml.load_all(yamlfdata)
             metadicts = list(yparsed_data)
+            # Populate anchor/index map
+            anchor_map = {anchors[i]: i for i in range(len(anchors))}
             # TODO!! Support prefabs with multiple meshes
-            if "MeshRenderer" in metadicts[2]:
-                mat_guids = []
-                for mn in metadicts[2]["MeshRenderer"]["m_Materials"]:
-                    mat_guids.append(mn["guid"])
-                mdl_guid = metadicts[3]["MeshFilter"]["m_Mesh"]["guid"]
-                prefab = {}
-                prefab["materials"] = mat_guids
-                prefab["model"] = mdl_guid
-                return prefab
+            for md in metadicts:
+                if "GameObject" in md:
+                    prefab = {}
+                    for c in md["GameObject"]["m_Component"]:
+                        comp_id = c["component"]["fileID"]
+                        component = metadicts[anchor_map[comp_id]]
+                        if "MeshRenderer" in component:
+                            mat_guids = []
+                            for mn in component["MeshRenderer"]["m_Materials"]:
+                                mat_guids.append(mn["guid"])
+                            prefab["materials"] = mat_guids
+                        elif "MeshFilter" in component:
+                            mdl_guid = component["MeshFilter"]["m_Mesh"]["guid"]
+                            prefab["model"] = mdl_guid
+                    return prefab
     return None
 
 def scene_from_file(f):
