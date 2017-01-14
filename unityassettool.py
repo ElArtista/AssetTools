@@ -143,8 +143,8 @@ def scene_from_file(f):
                     goid = component["m_GameObject"]["fileID"]
                     parnt_trans = component["m_Father"]["fileID"]
                     if parnt_trans != 0:
-                            parnt = transform_owner[parnt_trans]
-                            scene["objects"][goid]["transform"]["parent"] = str(parnt)
+                        parnt = transform_owner[parnt_trans]
+                        scene["objects"][goid]["transform"]["parent"] = str(parnt)
             return scene
     return None
 
