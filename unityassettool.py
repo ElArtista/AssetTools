@@ -56,9 +56,6 @@ def guid_from_meta_file(f):
             return guid
     return None
 
-def add_missing_unity_yaml_alias(yamlfdata):
-    pass
-
 def mat_from_file(f):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
