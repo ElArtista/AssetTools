@@ -85,6 +85,7 @@ def prefab_from_file(f):
                 prefab = {}
                 go_anchor = pf["m_RootGameObject"]["fileID"]
                 go = metadicts[anchor_map[go_anchor]]["GameObject"]
+                prefab["goid"] = go_anchor
                 for c in go["m_Component"]:
                     comp_id = c["component"]["fileID"]
                     component = metadicts[anchor_map[comp_id]]
@@ -118,6 +119,7 @@ def scene_from_file(f):
                     # Set prefab relation
                     if go["m_PrefabParentObject"]["fileID"] != 0:
                         obj["prefab"] = go["m_PrefabParentObject"]["guid"]
+                        obj["prefab_goid"] = go["m_PrefabParentObject"]["fileID"]
             # Populate full game objects with data
             transform_owner = {}
             for idx, md in enumerate(metadicts):
@@ -200,6 +202,17 @@ def scan_scenes(asset_dir, guididx, report_fn):
     return scan_assets(asset_dir, guididx, [".unity"], report_fn, process_fn)
 
 #-----------------------------------------------------------------
+def data_cleanup(data):
+    for scene in data["scenes"].values():
+        for obj in scene["objects"].values():
+            if "prefab" in obj:
+                prfb = data["prefabs"][obj["prefab"]]
+                if prfb["goid"] != obj["prefab_goid"]:
+                    del obj["prefab"]
+                del obj["prefab_goid"]
+    for prfb in data["prefabs"].values():
+        del prfb["goid"]
+
 def construct_json_output(assetmap):
     data = {}
     data["materials"] = assetmap["material"]
@@ -207,6 +220,7 @@ def construct_json_output(assetmap):
     data["models"] = assetmap["model"]
     data["prefabs"] = assetmap["prefab"]
     data["scenes"] = assetmap["scene"]
+    data_cleanup(data)
     return json.dumps(data, indent=4, sort_keys=True)
 
 
