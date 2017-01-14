@@ -79,22 +79,24 @@ def prefab_from_file(f):
             metadicts = list(yparsed_data)
             # Populate anchor/index map
             anchor_map = {anchors[i]: i for i in range(len(anchors))}
-            # TODO!! Support prefabs with multiple meshes
-            for md in metadicts:
-                if "GameObject" in md:
-                    prefab = {}
-                    for c in md["GameObject"]["m_Component"]:
-                        comp_id = c["component"]["fileID"]
-                        component = metadicts[anchor_map[comp_id]]
-                        if "MeshRenderer" in component:
-                            mat_guids = []
-                            for mn in component["MeshRenderer"]["m_Materials"]:
-                                mat_guids.append(mn["guid"])
-                            prefab["materials"] = mat_guids
-                        elif "MeshFilter" in component:
-                            mdl_guid = component["MeshFilter"]["m_Mesh"]["guid"]
-                            prefab["model"] = mdl_guid
-                    return prefab
+            # Get Prefab document
+            pf = next((md["Prefab"] for md in metadicts if "Prefab" in md), None)
+            if pf is not None:
+                prefab = {}
+                go_anchor = pf["m_RootGameObject"]["fileID"]
+                go = metadicts[anchor_map[go_anchor]]["GameObject"]
+                for c in go["m_Component"]:
+                    comp_id = c["component"]["fileID"]
+                    component = metadicts[anchor_map[comp_id]]
+                    if "MeshRenderer" in component:
+                        mat_guids = []
+                        for mn in component["MeshRenderer"]["m_Materials"]:
+                            mat_guids.append(mn["guid"])
+                        prefab["materials"] = mat_guids
+                    elif "MeshFilter" in component:
+                        mdl_guid = component["MeshFilter"]["m_Mesh"]["guid"]
+                        prefab["model"] = mdl_guid
+                return prefab
     return None
 
 def scene_from_file(f):
