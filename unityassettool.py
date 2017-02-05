@@ -60,8 +60,8 @@ def mat_from_file(f):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
         if yamlfdata:
-            metadict = yaml.load(yamlfdata)
-            tex_nodes = metadict["Material"]["m_SavedProperties"]["m_TexEnvs"]
+            metadicts, anchors = yaml.load_all(yamlfdata)
+            tex_nodes = list(metadicts)[0]["Material"]["m_SavedProperties"]["m_TexEnvs"]
             mat = {}
             for tn in tex_nodes:
                 if tn["second"]["m_Texture"]["fileID"] != 0:
