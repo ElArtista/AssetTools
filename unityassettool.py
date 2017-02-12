@@ -71,82 +71,88 @@ def mat_from_file(f):
             return mat
     return None
 
+def game_object_from_prefab(obj, prfb):
+    if "model" in prfb:
+        obj["model"] = prfb["model"]
+    if "transform" in prfb:
+        obj["transform"] = prfb["transform"]
+    if "materials" in prfb:
+        obj["materials"] = prfb["materials"]
+
+def game_objects_from_docs(docs, prefabs=None):
+    sobjs = {}
+    # Populate full game object list first with prefab references
+    for doc_id, md in docs.items():
+        if "GameObject" in md:
+            go = md["GameObject"]
+            obj = {}
+            obj["name"] = go["m_Name"]
+            # Populate from prefab
+            if go["m_PrefabParentObject"]["fileID"] != 0 and prefabs:
+                prfb_guid = go["m_PrefabParentObject"]["guid"]
+                prfb_fid  = go["m_PrefabParentObject"]["fileID"]
+                if prfb_guid in prefabs:
+                    prfb = prefabs[prfb_guid]
+                    game_object_from_prefab(obj, prfb[prfb_fid])
+            # Use document anchor as object id
+            sobjs[doc_id] = obj
+    # Populate full game objects with data
+    for goid, go in sobjs.items():
+        for c in docs[goid]["GameObject"]["m_Component"]:
+            comp_id = c["component"]["fileID"]
+            component = docs[comp_id]
+            if "MeshRenderer" in component:
+                mat_guids = []
+                for mn in component["MeshRenderer"]["m_Materials"]:
+                    mat_guids.append(mn["guid"])
+                go["materials"] = mat_guids
+            elif "MeshFilter" in component:
+                mm = component["MeshFilter"]["m_Mesh"]
+                mdl_guid = mm["guid"]
+                go["model"] = mdl_guid
+            elif "Transform" in component:
+                component = component["Transform"]
+                goid = component["m_GameObject"]["fileID"]
+                pc = component["m_LocalPosition"]
+                rc = component["m_LocalRotation"]
+                sc = component["m_LocalScale"]
+                # NOTE: Converting handness
+                trans = {
+                    "position" : [-pc["x"], pc["y"], pc["z"]],
+                    "rotation" : [rc["x"], -rc["y"], -rc["z"], rc["w"]],
+                    "scale"    : [sc["x"], sc["y"], sc["z"]]
+                }
+                go["transform"] = trans
+                parnt_trans = component["m_Father"]["fileID"]
+                if parnt_trans != 0:
+                    parnt = next(iter(docs[parnt_trans].values()))["m_GameObject"]["fileID"]
+                    go["transform"]["parent"] = str(parnt)
+    return sobjs
+
 def prefab_from_file(f):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
         if yamlfdata:
             yparsed_data, anchors = yaml.load_all(yamlfdata)
             metadicts = list(yparsed_data)
-            # Populate anchor/index map
-            anchor_map = {anchors[i]: i for i in range(len(anchors))}
             # Get Prefab document
             pf = next((md["Prefab"] for md in metadicts if "Prefab" in md), None)
             if pf is not None:
-                prefab = {}
-                go_anchor = pf["m_RootGameObject"]["fileID"]
-                go = metadicts[anchor_map[go_anchor]]["GameObject"]
-                prefab["goid"] = go_anchor
-                for c in go["m_Component"]:
-                    comp_id = c["component"]["fileID"]
-                    component = metadicts[anchor_map[comp_id]]
-                    if "MeshRenderer" in component:
-                        mat_guids = []
-                        for mn in component["MeshRenderer"]["m_Materials"]:
-                            mat_guids.append(mn["guid"])
-                        prefab["materials"] = mat_guids
-                    elif "MeshFilter" in component:
-                        mdl_guid = component["MeshFilter"]["m_Mesh"]["guid"]
-                        prefab["model"] = mdl_guid
+                docs = {anchors[i]: metadicts[i] for i in range(len(anchors))}
+                prefab = game_objects_from_docs(docs)
                 return prefab
     return None
 
-def scene_from_file(f):
+def scene_from_file(f, prefabs):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
         if yamlfdata:
             yparsed_data, anchors = yaml.load_all(yamlfdata)
             scene = {}
-            scene["objects"] = {}
             metadicts = list(yparsed_data)
-            # Populate full game object list first
-            for idx, md in enumerate(metadicts):
-                if "GameObject" in md:
-                    go = md["GameObject"]
-                    obj_id = anchors[idx]
-                    scene["objects"][obj_id] = {}
-                    obj = scene["objects"][obj_id]
-                    obj["name"] = go["m_Name"]
-                    # Set prefab relation
-                    if go["m_PrefabParentObject"]["fileID"] != 0:
-                        obj["prefab"] = go["m_PrefabParentObject"]["guid"]
-                        obj["prefab_goid"] = go["m_PrefabParentObject"]["fileID"]
-            # Populate full game objects with data
-            transform_owner = {}
-            for idx, md in enumerate(metadicts):
-                if "Transform" in md:
-                    component = md["Transform"]
-                    goid = component["m_GameObject"]["fileID"]
-                    pc = component["m_LocalPosition"]
-                    rc = component["m_LocalRotation"]
-                    sc = component["m_LocalScale"]
-                    # NOTE: Converting handness
-                    trans = {
-                        "position" : [-pc["x"], pc["y"], pc["z"]],
-                        "rotation" : [rc["x"], -rc["y"], -rc["z"], rc["w"]],
-                        "scale"    : [sc["x"], sc["y"], sc["z"]]
-                    }
-                    scene["objects"][goid]["transform"] = trans
-                    # Store parent game object id for later use
-                    transform_owner[anchors[idx]] = goid
-            # Create relations
-            for idx, md in enumerate(metadicts):
-                if "Transform" in md:
-                    component = md["Transform"]
-                    goid = component["m_GameObject"]["fileID"]
-                    parnt_trans = component["m_Father"]["fileID"]
-                    if parnt_trans != 0:
-                        parnt = transform_owner[parnt_trans]
-                        scene["objects"][goid]["transform"]["parent"] = str(parnt)
+            # Construct a more useful dictionary from fileID to document
+            docs = {anchors[i]: metadicts[i] for i in range(len(anchors))}
+            scene["objects"] = game_objects_from_docs(docs, prefabs)
             return scene
     return None
 
@@ -180,38 +186,68 @@ def scan_assets(asset_dir, guididx, ext_list, report_fn, asset_process_fn):
                 assetmap[guid] = asset
     return assetmap
 
-def scan_materials(asset_dir, guididx, report_fn):
+def scan_materials(asset_dir, guididx, report_fn, proc_args):
     process_fn = lambda f: mat_from_file(f)
     return scan_assets(asset_dir, guididx, [".mat"], report_fn, process_fn)
 
-def scan_textures(asset_dir, guididx, report_fn):
+def scan_textures(asset_dir, guididx, report_fn, proc_args):
     process_fn = lambda f: f
     ext_list = [".png", ".jpeg", ".jpg", ".tif", ".tga", ".bmp"]
     return scan_assets(asset_dir, guididx, ext_list, report_fn, process_fn)
 
-def scan_models(asset_dir, guididx, report_fn):
+def scan_models(asset_dir, guididx, report_fn, proc_args):
     process_fn = lambda f: f
     return scan_assets(asset_dir, guididx, [".fbx"], report_fn, process_fn)
 
-def scan_prefabs(asset_dir, guididx, report_fn):
+def scan_prefabs(asset_dir, guididx, report_fn, proc_args):
     process_fn = lambda f: prefab_from_file(f)
     return scan_assets(asset_dir, guididx, [".prefab"], report_fn, process_fn)
 
-def scan_scenes(asset_dir, guididx, report_fn):
-    process_fn = lambda f: scene_from_file(f)
+def scan_scenes(asset_dir, guididx, report_fn, proc_args):
+    prefabs = proc_args['prefab']
+    process_fn = lambda f: scene_from_file(f, prefabs)
     return scan_assets(asset_dir, guididx, [".unity"], report_fn, process_fn)
 
 #-----------------------------------------------------------------
-def data_cleanup(data):
-    for scene in data["scenes"].values():
-        for obj in scene["objects"].values():
-            if "prefab" in obj:
-                prfb = data["prefabs"][obj["prefab"]]
-                if prfb["goid"] != obj["prefab_goid"]:
-                    del obj["prefab"]
-                del obj["prefab_goid"]
+def tex_is_used(tex_ref, data):
+    for mat in data["materials"].values():
+        for mat_tex in mat.values():
+            if tex_ref == mat_tex:
+                return True
+    return False
+
+def mdl_is_used(mdl_ref, data):
     for prfb in data["prefabs"].values():
-        del prfb["goid"]
+        for prfb_obj in prfb.values():
+            if "model" in prfb_obj.keys():
+                if mdl_ref == prfb_obj["model"]:
+                    return True
+    for scene in data["scenes"].values():
+        for scn_obj in scene["objects"].values():
+            if "model" in scn_obj.keys():
+                if mdl_ref == scn_obj["model"]:
+                    return True
+    return False
+
+def data_cleanup(data):
+    # Remove uneccessary models and textures
+    for tex in data["textures"].copy().keys():
+        if not tex_is_used(tex, data):
+            del data["textures"][tex]
+    for mdl in data["models"].copy().keys():
+        if not mdl_is_used(mdl, data):
+            del data["models"][mdl]
+    # Remove invalid model and material references
+    for scene in data["scenes"].values():
+        for scn_obj in scene["objects"].values():
+            if "model" in scn_obj.keys():
+                if scn_obj["model"] not in data["models"]:
+                    del scn_obj["model"]
+                if "materials" in scn_obj.keys():
+                    obj_mats = scn_obj["materials"]
+                    for mat in obj_mats:
+                        if mat not in data["materials"]:
+                            obj_mats.remove(mat)
 
 def construct_json_output(assetmap):
     data = {}
@@ -222,7 +258,6 @@ def construct_json_output(assetmap):
     data["scenes"] = assetmap["scene"]
     data_cleanup(data)
     return json.dumps(data, indent=4, sort_keys=True)
-
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -240,13 +275,14 @@ def main():
     # Create inverse map
     inv_map = {v: k for k, v in guidmap.items()}
 
+    assetmap = {}
     assettypes = ['material', 'texture', 'model', 'prefab', 'scene']
     assetscanners = [scan_materials, scan_textures, scan_models, scan_prefabs, scan_scenes]
-    assetmap = {}
+    assetscanargs = [None, None, None, None, assetmap]
     for at in assettypes:
         report_fn = lambda f: eprint(clear_line + "[+] Processing %s file: %s" % (at, f), end='\r')
         idx = assettypes.index(at)
-        assetmap[at] = assetscanners[idx](search_dir, inv_map, report_fn)
+        assetmap[at] = assetscanners[idx](search_dir, inv_map, report_fn, proc_args=assetscanargs[idx])
         eprint(clear_line + "[+] Processing %s files done." % (at))
 
     eprint("[+] Generating json output...")
