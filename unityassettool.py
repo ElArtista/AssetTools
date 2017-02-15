@@ -10,16 +10,30 @@ import sys
 import argparse
 import yaml
 import json
+import time
+
+# Use more performant libyaml backend
+LOADER = yaml.CLoader
 
 # Provide a simple pass through constructor for base nodes that are tagged with
 # Unity's '!u!xxx' directive
 def unity_yaml_constructor(loader, tag_suffix, node):
     value = loader.construct_mapping(node)
     return value
-yaml.add_multi_constructor("tag:unity3d.com,2011:", unity_yaml_constructor)
+yaml.add_multi_constructor("tag:unity3d.com,2011:", unity_yaml_constructor, Loader=LOADER)
+
 # HACK: Unity yaml files miss the tag declaration between streams.
 # Add it to the Loader's default (from language spec) list so it always resolves
 yaml.Loader.DEFAULT_TAGS[u'!u!'] = "tag:unity3d.com,2011:"
+
+# HACK: Unity yaml files miss the tag declaration between streams.
+# Preprocess yaml source to add the tag declaration in every stream
+def yaml_preproc_stream(stream):
+    # Remove '%TAG !u! tag:unity3d.com,2011:' lines
+    # and prepend '%TAG !u! tag:unity3d.com,2011:' line before every '--- !u!xxx' line
+    stream = stream.replace('\n%TAG !u! tag:unity3d.com,2011:\n','\n') \
+                   .replace('\n--- !u!', '\n%TAG !u! tag:unity3d.com,2011:\n--- !u!')
+    return stream
 
 # HACK: Unity yaml files misuse anchor functionality. Each unity yaml document
 # is marked with an anchor that is never dereferrenced according to the yaml specification
@@ -27,7 +41,7 @@ yaml.Loader.DEFAULT_TAGS[u'!u!'] = "tag:unity3d.com,2011:"
 # We wrap some parser functions to populate an anchor list in order to have access to this
 # data that are by default discarded/processed by the yaml parser.
 yaml_default_load_all_fn = yaml.load_all
-yaml_default_get_event_fn = yaml.Loader.get_event
+yaml_default_get_event_fn = LOADER.get_event
 anchor_list = []
 def yaml_loader_get_event_wrapper(self):
     global anchor_list
@@ -35,12 +49,14 @@ def yaml_loader_get_event_wrapper(self):
     if isinstance(ev, yaml.CollectionStartEvent) and ev.anchor is not None:
         anchor_list.append(int(ev.anchor))
     return ev
-def yaml_load_all_with_document_anchors(stream, Loader=yaml.Loader):
+def yaml_load_all_with_document_anchors(stream, Loader=LOADER):
     global anchor_list
+    if Loader == yaml.CLoader:
+        stream = yaml_preproc_stream(stream)
     anchor_list = []
     return (yaml_default_load_all_fn(stream, Loader), anchor_list)
 yaml.load_all = yaml_load_all_with_document_anchors
-yaml.Loader.get_event = yaml_loader_get_event_wrapper
+LOADER.get_event = yaml_loader_get_event_wrapper
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -263,6 +279,9 @@ def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 def main():
+    # Profiling start
+    start_time = time.time()
+
     # Search directory
     args = parse_args()
     search_dir = args.search_dir
@@ -288,6 +307,10 @@ def main():
     eprint("[+] Generating json output...")
     json_out = construct_json_output(assetmap)
     print(json_out)
+
+    # Show execution time
+    tot_time = time.time() - start_time
+    eprint("Total time: %f" %(tot_time))
 
 if __name__ == '__main__':
     main()
