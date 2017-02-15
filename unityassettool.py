@@ -5,6 +5,7 @@
     Helper script to convert unity prefab/scene formats to arbitary json format
 """
 
+from __future__ import print_function
 import os
 import sys
 import argparse
@@ -287,7 +288,7 @@ def main():
     search_dir = args.search_dir
 
     # Scan .meta files and construct map with guids to filepaths
-    clear_line = 128 * " " + "\r"
+    clear_line = 80 * " " + "\r"
     report_fn = lambda f: eprint(clear_line + "[+] Parsing metadata file: %s" % (f), end='\r')
     guidmap = scan_meta_files(search_dir, report_fn)
     eprint(clear_line + "[+] Parsing metadata files done.")
