@@ -7,6 +7,7 @@
 
 from __future__ import print_function
 import os
+import re
 import sys
 import argparse
 import yaml
@@ -41,23 +42,35 @@ def yaml_preproc_stream(stream):
 # but is actually used by some "fileID" attributes in various objects.
 # We wrap some parser functions to populate an anchor list in order to have access to this
 # data that are by default discarded/processed by the yaml parser.
-yaml_default_load_all_fn = yaml.load_all
-yaml_default_get_event_fn = LOADER.get_event
+
+# Global cleared on every load_all invocation
 anchor_list = []
+
+# With yaml.Loader use a get_event wrapper to gather anchors
+yaml_default_get_event_fn = LOADER.get_event
 def yaml_loader_get_event_wrapper(self):
     global anchor_list
     ev = yaml_default_get_event_fn(self)
     if isinstance(ev, yaml.CollectionStartEvent) and ev.anchor is not None:
         anchor_list.append(int(ev.anchor))
     return ev
+LOADER.get_event = yaml_loader_get_event_wrapper
+
+# With yaml.CLoader scan stream for document anchors
+def yaml_gather_doc_anchors(stream):
+    anchors = re.findall(r'^--- !u!\d+\s+&(\d+)', stream, flags=re.MULTILINE)
+    return [int(a) for a in anchors]
+
+# Wrap load_all function to return per document anchor
+yaml_default_load_all_fn = yaml.load_all
 def yaml_load_all_with_document_anchors(stream, Loader=LOADER):
     global anchor_list
+    anchor_list = []
     if Loader == yaml.CLoader:
         stream = yaml_preproc_stream(stream)
-    anchor_list = []
+        anchor_list = yaml_gather_doc_anchors(stream)
     return (yaml_default_load_all_fn(stream, Loader), anchor_list)
 yaml.load_all = yaml_load_all_with_document_anchors
-LOADER.get_event = yaml_loader_get_event_wrapper
 
 def parse_args():
     parser = argparse.ArgumentParser()
