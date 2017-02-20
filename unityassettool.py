@@ -165,6 +165,12 @@ def game_objects_from_docs(docs, prefabs=None):
                 child_transfs = [str(next(iter(docs[e["fileID"]].values()))["m_GameObject"]["fileID"]) for e in component["m_Children"]]
                 if child_transfs:
                     go["transform"]["children"] = child_transfs
+    for sobj_id, sobj in sobjs.copy().items():
+        if "children" not in sobj["transform"] and "model" not in sobj:
+            if "parent" in sobj["transform"]:
+                prnt = sobjs[int(sobj["transform"]["parent"])]
+                prnt["transform"]["children"].remove(str(sobj_id))
+            del sobjs[sobj_id]
     return sobjs
 
 def merge_same_model_gameobjects(docs, gobjs):
@@ -189,8 +195,6 @@ def merge_same_model_gameobjects(docs, gobjs):
                     prnt_obj = merged_gobjs[prnt_id]
                     if "model" in prnt_obj and prnt_obj["model"] == obj["model"]:
                         prnt_obj["materials"].extend(obj["materials"])
-                        # Last element must remain the same now that we merged
-                        obj_id = sibl_id
                         merged = True
                     # Check if mergable with previous sibling
                     if not merged and last_elem:
