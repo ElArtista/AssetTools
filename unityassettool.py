@@ -97,7 +97,8 @@ def mat_from_file(f):
                 if tn["second"]["m_Texture"]["fileID"] != 0:
                     tex_type = tn["first"]["name"][1:]
                     tex_guid = tn["second"]["m_Texture"]["guid"]
-                    mat[tex_type] = tex_guid
+                    tex_scal = tn["second"]["m_Scale"]
+                    mat[tex_type] = {"texture": tex_guid, "scale": [tex_scal["x"], tex_scal["y"]]}
             return mat
     return None
 
@@ -299,8 +300,8 @@ def scan_scenes(asset_dir, guididx, report_fn, proc_args):
 #-----------------------------------------------------------------
 def tex_is_used(tex_ref, data):
     for mat in data["materials"].values():
-        for mat_tex in mat.values():
-            if tex_ref == mat_tex:
+        for mat_type in mat.values():
+            if tex_ref == mat_type["texture"]:
                 return True
     return False
 
