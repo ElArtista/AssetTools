@@ -195,6 +195,7 @@ def merge_same_model_gameobjects(docs, gobjs):
                     prnt_obj = merged_gobjs[prnt_id]
                     if "model" in prnt_obj and prnt_obj["model"] == obj["model"]:
                         prnt_obj["materials"].extend(obj["materials"])
+                        obj_id = prnt_id
                         merged = True
                     # Check if mergable with previous sibling
                     if not merged and last_elem:
@@ -214,7 +215,10 @@ def merge_same_model_gameobjects(docs, gobjs):
                 merged_gobjs[obj_id] = obj
         else:
             # Add its children to be processed
-            queue.extend(sorted([int(chld_id) for chld_id in obj["transform"]["children"]], reverse=True))
+            chld_ids = [int(chld_id) for chld_id in obj["transform"]["children"]]
+            # Sort by prefab fileID
+            sorted_chld_ids = sorted(chld_ids, key=lambda x: docs[x]["GameObject"]["m_PrefabParentObject"]["fileID"])
+            queue.extend(sorted_chld_ids)
             # Add the element to the processed list
             merged_gobjs[obj_id] = obj
     return merged_gobjs
@@ -230,7 +234,7 @@ def prefab_from_file(f):
             if pf is not None:
                 docs = {anchors[i]: metadicts[i] for i in range(len(anchors))}
                 prefab_gobjs = game_objects_from_docs(docs)
-                return merge_same_model_gameobjects(docs, prefab_gobjs)
+                return prefab_gobjs
     return None
 
 def scene_from_file(f, prefabs):
