@@ -86,6 +86,20 @@ def guid_from_meta_file(f):
             return guid
     return None
 
+def model_from_file(f):
+    with open(f+".meta", "r") as mf:
+        yamlfdata = mf.read()
+        if yamlfdata:
+            yparsed_data, anchors = yaml.load_all(yamlfdata)
+            metadicts = list(yparsed_data)
+            mi = next((md["ModelImporter"] for md in metadicts if "ModelImporter" in md), None)
+            if mi is not None:
+                glbl_scl = mi["meshes"]["globalScale"]
+                use_funits = mi["meshes"]["useFileUnits"]
+                use_fscale = mi["meshes"]["useFileScale"]
+                return {"path": f, "global_scale": glbl_scl, "use_funits": use_funits, "use_fscale": use_fscale}
+    return None
+
 def mat_from_file(f):
     with open(f, "r") as mf:
         yamlfdata = mf.read()
@@ -108,7 +122,7 @@ def game_object_from_prefab(obj, prfb):
     if "transform" in prfb:
         obj["transform"] = prfb["transform"]
     if "materials" in prfb:
-        obj["materials"] = prfb["materials"].copy()
+        obj["materials"] = list(prfb["materials"])
 
 def game_objects_from_docs(docs, prefabs=None):
     sobjs = {}
@@ -293,7 +307,7 @@ def scan_textures(asset_dir, guididx, report_fn, proc_args):
     return scan_assets(asset_dir, guididx, ext_list, report_fn, process_fn)
 
 def scan_models(asset_dir, guididx, report_fn, proc_args):
-    process_fn = lambda f: f
+    process_fn = lambda f: model_from_file(f)
     return scan_assets(asset_dir, guididx, [".fbx"], report_fn, process_fn)
 
 def scan_prefabs(asset_dir, guididx, report_fn, proc_args):
@@ -345,6 +359,20 @@ def data_cleanup(data):
                     for mat in obj_mats:
                         if mat not in data["materials"]:
                             obj_mats.remove(mat)
+    # Bake model scales in transform attributes
+    for scene in data["scenes"].values():
+        for scn_obj in scene["objects"].values():
+            for i in range(3):
+                scn_obj["transform"]["position"][i] *= 100
+            if "model" in scn_obj and "children" not in scn_obj["transform"]:
+                mdl = data["models"][scn_obj["model"]]
+                for i in range(3):
+                    scn_obj["transform"]["scale"][i] *= mdl["global_scale"]
+                    if mdl["use_funits"] == 0:
+                        scn_obj["transform"]["scale"][i] *= 100
+    # Remove temporary keys from model entries
+    for mdl_key, mdl in data["models"].items():
+        data["models"][mdl_key] = mdl["path"]
 
 def construct_json_output(assetmap):
     data = {}
