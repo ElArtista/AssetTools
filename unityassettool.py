@@ -94,10 +94,12 @@ def model_from_file(f):
             metadicts = list(yparsed_data)
             mi = next((md["ModelImporter"] for md in metadicts if "ModelImporter" in md), None)
             if mi is not None:
+                group_ids = mi["fileIDToRecycleName"]
                 glbl_scl = mi["meshes"]["globalScale"]
                 use_funits = mi["meshes"]["useFileUnits"]
-                use_fscale = mi["meshes"]["useFileScale"]
-                return {"path": f, "global_scale": glbl_scl, "use_funits": use_funits, "use_fscale": use_fscale}
+                use_fscale = mi["meshes"].get("useFileScale", 0)
+                return {"path": f, "group_names": group_ids,
+                        "global_scale": glbl_scl, "use_funits": use_funits, "use_fscale": use_fscale}
     return None
 
 def mat_from_file(f):
@@ -119,10 +121,22 @@ def mat_from_file(f):
 def game_object_from_prefab(obj, prfb):
     if "model" in prfb:
         obj["model"] = prfb["model"]
+        obj["mgroup_name"] = prfb["mgroup_name"]
     if "transform" in prfb:
         obj["transform"] = prfb["transform"]
     if "materials" in prfb:
         obj["materials"] = list(prfb["materials"])
+
+def remove_inactive_gobjs(docs, gobjs):
+    def remove_gobj(docs, gobjs, goid):
+        go = gobjs[goid]
+        if "children" in go["transform"]:
+            for chld_id in go["transform"]["children"]:
+                remove_gobj(docs, gobjs, int(chld_id))
+        del gobjs[goid]
+    for goid in gobjs.copy().keys():
+        if docs[goid]["GameObject"]["m_IsActive"] == 0:
+            remove_gobj(docs, gobjs, goid)
 
 def game_objects_from_docs(docs, prefabs=None):
     sobjs = {}
@@ -142,6 +156,8 @@ def game_objects_from_docs(docs, prefabs=None):
                     obj["prefab_guid"] = prfb_guid
             # Use document anchor as object id
             sobjs[doc_id] = obj
+
+    disabled_gobjs = set()
     # Populate full game objects with data
     for goid, go in sobjs.items():
         for c in docs[goid]["GameObject"]["m_Component"]:
@@ -153,10 +169,14 @@ def game_objects_from_docs(docs, prefabs=None):
                     mat_guids.append(mn["guid"])
                 if not prefabs or (prefabs and "prefab_guid" not in go):
                     go["materials"] = mat_guids
+                if component["MeshRenderer"]["m_Enabled"] == 0:
+                    disabled_gobjs.add(goid)
             elif "MeshFilter" in component:
                 mm = component["MeshFilter"]["m_Mesh"]
                 mdl_guid = mm["guid"]
+                mesh_fid = mm["fileID"]
                 go["model"] = mdl_guid
+                go["mgroup_name"] = mesh_fid
             elif "Transform" in component or "RectTransform" in component:
                 component = next(iter(component.values()))
                 goid = component["m_GameObject"]["fileID"]
@@ -179,63 +199,21 @@ def game_objects_from_docs(docs, prefabs=None):
                 child_transfs = [str(next(iter(docs[e["fileID"]].values()))["m_GameObject"]["fileID"]) for e in component["m_Children"]]
                 if child_transfs:
                     go["transform"]["children"] = child_transfs
+
+    # Remove inactive objects
+    remove_inactive_gobjs(docs, sobjs)
+    # Remove leaf nodes that have no mesh
     for sobj_id, sobj in sobjs.copy().items():
         if "children" not in sobj["transform"] and "model" not in sobj:
             if "parent" in sobj["transform"]:
                 prnt = sobjs[int(sobj["transform"]["parent"])]
                 prnt["transform"]["children"].remove(str(sobj_id))
             del sobjs[sobj_id]
+    # Remove disabled objects
+    for dgobj in list(disabled_gobjs):
+        if dgobj in sobjs:
+            del sobjs[dgobj]
     return sobjs
-
-def merge_same_model_gameobjects(docs, gobjs):
-    merged_gobjs = {}
-    root_obj_ids = [obj_id for obj_id, obj in gobjs.items() if "parent" not in obj["transform"]]
-    queue = []
-    queue.extend(root_obj_ids)
-    obj_id = None
-    while len(queue):
-        # Store last element
-        last_elem = obj_id
-        # Get current element
-        obj_id = queue.pop(0)
-        # Check if element is mergable
-        obj = gobjs[obj_id]
-        if "children" not in obj["transform"]:
-            merged = False
-            if "model" in obj:
-                if "parent" in obj["transform"]:
-                    # Check if mergable with parent
-                    prnt_id = int(obj["transform"]["parent"])
-                    prnt_obj = merged_gobjs[prnt_id]
-                    if "model" in prnt_obj and prnt_obj["model"] == obj["model"]:
-                        prnt_obj["materials"].extend(obj["materials"])
-                        obj_id = prnt_id
-                        merged = True
-                    # Check if mergable with previous sibling
-                    if not merged and last_elem:
-                        sibl_id = last_elem
-                        sibl_obj = merged_gobjs[sibl_id]
-                        # Check for same parent, thus siblings
-                        if "parent" in sibl_obj["transform"] and sibl_obj["transform"]["parent"] == obj["transform"]["parent"]:
-                            if "model" in sibl_obj and sibl_obj["model"] == obj["model"]:
-                                if "materials" in obj:
-                                    if "materials" not in sibl_obj:
-                                        sibl_obj["materials"] = []
-                                    sibl_obj["materials"].extend(obj["materials"])
-                                # Last element must remain the same now that we merged
-                                obj_id = sibl_id
-                                merged = True
-            if not merged:
-                merged_gobjs[obj_id] = obj
-        else:
-            # Add its children to be processed
-            chld_ids = [int(chld_id) for chld_id in obj["transform"]["children"]]
-            # Sort by prefab fileID
-            sorted_chld_ids = sorted(chld_ids, key=lambda x: docs[x]["GameObject"]["m_PrefabParentObject"]["fileID"])
-            queue.extend(sorted_chld_ids)
-            # Add the element to the processed list
-            merged_gobjs[obj_id] = obj
-    return merged_gobjs
 
 def prefab_from_file(f):
     with open(f, "r") as mf:
@@ -261,9 +239,7 @@ def scene_from_file(f, prefabs):
             # Construct a more useful dictionary from fileID to document
             docs = {anchors[i]: metadicts[i] for i in range(len(anchors))}
             gobjs = game_objects_from_docs(docs, prefabs)
-            merged_objs = merge_same_model_gameobjects(docs, gobjs)
-            #eprint("UNMERGED: " + str(len(gobjs)) + " MERGED: " + str(len(merged_objs)))
-            scene["objects"] = merged_objs
+            scene["objects"] = gobjs
             return scene
     return None
 
@@ -370,6 +346,13 @@ def data_cleanup(data):
                     scn_obj["transform"]["scale"][i] *= mdl["global_scale"]
                     if mdl["use_funits"] == 0:
                         scn_obj["transform"]["scale"][i] *= 100
+    # Replace placeholder mesh group references
+    for scene in data["scenes"].values():
+        for scn_obj in scene["objects"].values():
+            if "model" in scn_obj.keys():
+                mdl = data["models"][scn_obj["model"]]
+                mgroup_id = scn_obj["mgroup_name"]
+                scn_obj["mgroup_name"] = mdl["group_names"][mgroup_id]
     # Remove temporary keys from model entries
     for mdl_key, mdl in data["models"].items():
         data["models"][mdl_key] = mdl["path"]
