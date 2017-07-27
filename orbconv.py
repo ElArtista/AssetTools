@@ -121,13 +121,17 @@ class Mesh:
     @property
     def mat_index(self):
         return self._mat_index
+    @mat_index.setter
+    def mat_index(self, mat_index):
+        self._mat_index = mat_index
     @staticmethod
     def meshes_from_bmesh(bm):
         meshes = []
         verts = []; inds = []; vertex_db = {}
         mat_idx = 0
         uv_lay = bm.loops.layers.uv.active
-        for f in bm.faces:
+        facelist = sorted([f for f in bm.faces], key=lambda f: f.material_index)
+        for f in facelist:
             if f.material_index != mat_idx:
                 # Flush mesh
                 meshes.append(Mesh(verts, inds, mat_idx))
@@ -240,6 +244,7 @@ def main():
 
     # Processing
     meshes = []
+    mat_db = {}
     for o in bpy.context.selected_objects:
         if o.type == 'MESH':
             print("[+] Processing {}".format(o.name))
@@ -254,11 +259,18 @@ def main():
             # Triangulate
             bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method=0, ngon_method=0)
             # Gather mesh data
-            time_point = datetime.now()
-            m = Mesh.meshes_from_bmesh(bm)
-            ellapsed = datetime.now() - time_point
-            print("[+] Processing time: {} secs".format(ellapsed.total_seconds()))
-            meshes.extend(m)
+            mlist = Mesh.meshes_from_bmesh(bm)
+            # Reassign mat indexes
+            for i in range(len(mlist)):
+                mesh = mlist[i]
+                mat  = o.material_slots[i].name
+                if mat in mat_db:
+                    mesh.mat_index = mat_db[mat]
+                else:
+                    nidx = len(mat_db)
+                    mat_db[mat] = nidx
+                    mesh.mat_index = nidx
+            meshes.extend(mlist)
             # Free bmesh repr
             bm.free()
 
