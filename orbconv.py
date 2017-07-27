@@ -213,7 +213,7 @@ def model_to_mdlfile(meshes):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("input", help="Fbx file to process")
+    parser.add_argument("input", help="Model file to process")
     return parser.parse_args()
 
 def main():
