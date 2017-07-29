@@ -9,6 +9,7 @@ import io
 import argparse
 import bpy
 import bmesh
+import mathutils
 
 from datetime import datetime
 from contextlib import redirect_stdout
@@ -107,6 +108,20 @@ class Vertex:
              ^ hash(self.uv[0])  \
              ^ hash(self.uv[1])
 
+class Joint:
+    def __init__(self, name, pos, rot, scl, par_idx):
+        self.name = name
+        self.pos = pos
+        self.rot = rot
+        self.scl = scl
+        self.par_idx = par_idx
+    def __eq__(self, other):
+        return self.name == other.name \
+           and self.pos == other.pos \
+           and self.rot == other.rot \
+           and self.scl == other.scl \
+           and self.par_idx == other.par_idx
+
 class Mesh:
     def __init__(self, verts, inds, mat_idx):
         self._verts = verts
@@ -152,27 +167,34 @@ class Mesh:
         meshes.append(Mesh(verts, inds, mat_idx))
         return meshes
 
-def model_to_mdlfile(meshes):
+def model_to_mdlfile(meshes, joints):
     tot_verts = 0
     tot_inds  = 0
     for m in meshes:
         tot_verts += len(m.vertices)
         tot_inds  += len(m.indices)
+
+    strings = ""
+    string_ofs = []
+    for j in joints:
+        string_ofs.append(len(strings))
+        strings += j.name + '\0'
+
     h = ffi.new("struct mdl_header*")
     h.id                    = [0x4D, 0x44, 0x4C, 0x00]
     h.ver                   = [0, 1]
-    h.flags                 = [0, 0]
+    h.flags                 = [1 if len(joints) != 0 else 0, 0]
     h.num_mesh_descs        = len(meshes)
     h.num_vertices          = tot_verts
     h.num_indices           = tot_inds
-    h.num_joints            = 0
+    h.num_joints            = len(joints)
     h.num_strings           = 0
     h.mesh_descs.offset     = ffi.sizeof("struct mdl_header")
     h.mesh_descs.size       = h.num_mesh_descs * ffi.sizeof("struct mdl_mesh_desc")
     h.verts.offset          = h.mesh_descs.offset + h.mesh_descs.size;
     h.verts.size            = h.num_vertices * ffi.sizeof("struct mdl_vertex")
     h.weights.offset        = h.verts.offset + h.verts.size;
-    h.weights.size          = 0
+    h.weights.size          = h.num_vertices * ffi.sizeof("struct mdl_vertex_weight") if h.flags.rigged else 0
     h.indices.offset        = h.weights.offset + h.weights.size
     h.indices.size          = h.num_indices * ffi.sizeof("u32")
     h.joints.offset         = h.indices.offset + h.indices.size
@@ -180,9 +202,9 @@ def model_to_mdlfile(meshes):
     h.joint_name_ofs.offset = h.joints.offset + h.joints.size
     h.joint_name_ofs.size   = h.num_joints * ffi.sizeof("u32")
     h.strings.offset        = h.joint_name_ofs.offset + h.joint_name_ofs.size
-    h.strings.size          = 0
+    h.strings.size          = len(strings)
 
-    sz = h.strings.offset
+    sz = h.strings.offset + h.strings.size
     buf = ffi.new("byte[]", sz)
     ffi.memmove(buf, h, ffi.sizeof("struct mdl_header"))
 
@@ -194,7 +216,7 @@ def model_to_mdlfile(meshes):
         md.num_vertices = len(mesh.vertices)
         md.num_indices  = len(mesh.indices)
         md.ofs_verts    = vofs * ffi.sizeof("struct mdl_vertex")
-        md.ofs_weights  = MDL_INVALID_OFFSET
+        md.ofs_weights  = vofs * ffi.sizeof("struct mdl_vertex_weight") if h.flags.rigged else MDL_INVALID_OFFSET
         md.ofs_indices  = iofs * ffi.sizeof("u32")
         md.mat_idx = mesh.mat_index
         for j in range(len(mesh.vertices)):
@@ -208,6 +230,21 @@ def model_to_mdlfile(meshes):
         ffi.memmove(buf + h.indices.offset + md.ofs_indices, idxbuf, md.num_indices * ffi.sizeof("u32"))
         vofs += md.num_vertices
         iofs += md.num_indices
+
+    if h.flags.rigged:
+        for i in range(h.num_joints):
+            jnt = joints[i]
+            mj = ffi.cast("struct mdl_joint*", (buf + h.joints.offset)) + i
+            mj.position = jnt.pos
+            mj.rotation = jnt.rot
+            mj.scaling  = jnt.scl
+            mj.ref_parent = jnt.par_idx if jnt.par_idx != -1 else MDL_INVALID_OFFSET
+
+    if h.strings.size != 0:
+        jname_buf = ffi.new("u32[]", string_ofs)
+        ffi.memmove(buf + h.joint_name_ofs.offset, jname_buf, len(string_ofs) * ffi.sizeof("u32"))
+        strings_buf = ffi.new("char[]", strings.encode('utf-8'))
+        ffi.memmove(buf + h.strings.offset, strings_buf, ffi.sizeof(strings_buf))
 
     return ffi.buffer(buf)
 
@@ -244,6 +281,7 @@ def main():
 
     # Processing
     meshes = []
+    joints = []
     mat_db = {}
     for o in bpy.context.selected_objects:
         if o.type == 'MESH':
@@ -252,7 +290,8 @@ def main():
             bm = bmesh.new()
             bm.from_mesh(o.data)
             # Transform
-            tmat = axis_conversion(to_forward='-Z', to_up='Y').to_4x4()
+            #tmat = axis_conversion(to_forward='-Z', to_up='Y').to_4x4() * o.matrix_local
+            tmat = o.matrix_local
             bm.transform(tmat)
             if tmat.determinant() < 0.0:
                 bm.flip_normals() # If negative scaling, we have to invert the normals...
@@ -273,9 +312,23 @@ def main():
             meshes.extend(mlist)
             # Free bmesh repr
             bm.free()
+        elif o.type == 'ARMATURE':
+            print("[+] Joint group {} with {} bones".format(o.name, len(o.pose.bones)))
+            quat_fmt = lambda q: [q.x, q.y, q.z, q.w]
+            joints.append(Joint(o.name, [0.0, 0.0, 0.0], quat_fmt(mathutils.Quaternion()), [1.0, 1.0, 1.0], -1))
+            bones = list(o.data.bones)
+            for b in bones:
+                par_name = b.parent.name if b.parent else o.name
+                par_idx = next(i for i,j in enumerate(joints) if j.name == par_name)
+                bon_mat = b.matrix_local
+                par_mat = mathutils.Matrix.Identity(4) if not b.parent else b.parent.matrix_local
+                mat = par_mat.inverted() * bon_mat
+                pos, rot, scl = mat.decompose()
+                j = Joint(b.name, pos[:], quat_fmt(rot), scl[:], par_idx)
+                joints.append(j)
 
     # Write output file
-    fdata = model_to_mdlfile(meshes)
+    fdata = model_to_mdlfile(meshes, joints)
     output_file = input_file + ".mdl"
     with open(output_file, "wb") as f:
         f.write(fdata)
