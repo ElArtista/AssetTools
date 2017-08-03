@@ -7,6 +7,7 @@
 import os
 import io
 import argparse
+import copy
 import bpy
 import bmesh
 import mathutils
@@ -16,6 +17,9 @@ from contextlib import redirect_stdout
 from cffi import FFI
 from bpy_extras.io_utils import axis_conversion
 
+#----------------------------------------------------------------------
+# Mdl/Anm export
+#----------------------------------------------------------------------
 ffi = FFI()
 ffi.cdef("""
 typedef uint8_t  u8;
@@ -85,9 +89,56 @@ struct mdl_joint {
     f32 position[3];
     f32 rotation[4];
     f32 scaling[3];
-};""")
+};
+
+struct anm_header {
+    byte id[4];
+    struct {
+        u16 maj;
+        u16 min;
+    } ver;
+    f32 frame_rate;
+    u16 num_joints;
+    u16 num_frames;
+    u32 num_changes;
+    data_chunk joints;
+    data_chunk frame_infos;
+    data_chunk changes;
+};
+
+struct anm_joint {
+    u32 par_idx;
+    f32 position[3];
+    f32 rotation[4];
+    f32 scaling[3];
+};
+
+struct anm_frame_info {
+    u16 num_changes;
+};
+
+struct anm_change {
+    u16 joint_idx;
+    u16 components;
+    f32 pos[3];
+    f32 rot[4];
+    f32 scl[3];
+};
+""")
 
 MDL_INVALID_OFFSET = 0xFFFFFFFF
+
+ANM_COMP_UNKN = (1 << 0)
+ANM_COMP_POSX = (1 << 1)
+ANM_COMP_POSY = (1 << 2)
+ANM_COMP_POSZ = (1 << 3)
+ANM_COMP_ROTX = (1 << 4)
+ANM_COMP_ROTY = (1 << 5)
+ANM_COMP_ROTZ = (1 << 6)
+ANM_COMP_ROTW = (1 << 7)
+ANM_COMP_SCLX = (1 << 8)
+ANM_COMP_SCLY = (1 << 9)
+ANM_COMP_SCLZ = (1 << 10)
 
 class Vertex:
     def __init__(self, pos, nm, uv):
@@ -122,14 +173,23 @@ class Joint:
            and self.scl == other.scl \
            and self.par_idx == other.par_idx
 
+class VertexWeight:
+    def __init__(self, blend_ids, blend_weights):
+        self.blend_ids = blend_ids
+        self.blend_weights = blend_weights
+
 class Mesh:
-    def __init__(self, verts, inds, mat_idx):
+    def __init__(self, verts, weights, inds, mat_idx):
         self._verts = verts
+        self._weights = weights
         self._inds  = inds
         self._mat_index = mat_idx
     @property
     def vertices(self):
         return self._verts
+    @property
+    def weights(self):
+        return self._weights
     @property
     def indices(self):
         return self._inds
@@ -140,18 +200,19 @@ class Mesh:
     def mat_index(self, mat_index):
         self._mat_index = mat_index
     @staticmethod
-    def meshes_from_bmesh(bm):
+    def meshes_from_bmesh(bm, jnt_names, vgrp_names):
         meshes = []
-        verts = []; inds = []; vertex_db = {}
+        verts = []; weights = []; inds = []; vertex_db = {}
         mat_idx = 0
         uv_lay = bm.loops.layers.uv.active
+        deform_lay = bm.verts.layers.deform.active
         facelist = sorted([f for f in bm.faces], key=lambda f: f.material_index)
         for f in facelist:
             if f.material_index != mat_idx:
                 # Flush mesh
-                meshes.append(Mesh(verts, inds, mat_idx))
+                meshes.append(Mesh(verts, weights, inds, mat_idx))
                 mat_idx = f.material_index
-                verts = []; inds = []; vertex_db = {}
+                verts = []; weights = []; inds = []; vertex_db = {}
             for loop in f.loops:
                 indice = loop.vert.index
                 v  = loop.vert
@@ -164,7 +225,21 @@ class Mesh:
                     inds.append(indice)
                     verts.append(nv)
                     vertex_db[nv] = indice
-        meshes.append(Mesh(verts, inds, mat_idx))
+                    # Vertex weights
+                    if jnt_names and vgrp_names:
+                        blend_ids = [0] * 4; blend_weights = [0.0] * 4
+                        k = 0
+                        for vgrp_idx, weight in v[deform_lay].items():
+                            if k >= 4:
+                                break
+                            vgrp_name = vgrp_names[vgrp_idx]
+                            index = next(i for i,jn in enumerate(jnt_names) if jn == vgrp_name)
+                            blend_ids[k] = index; blend_weights[k] = weight
+                            k += 1
+                        vw = VertexWeight(blend_ids, blend_weights)
+                        weights.append(vw)
+
+        meshes.append(Mesh(verts, weights, inds, mat_idx))
         return meshes
 
 def model_to_mdlfile(meshes, joints):
@@ -188,12 +263,12 @@ def model_to_mdlfile(meshes, joints):
     h.num_vertices          = tot_verts
     h.num_indices           = tot_inds
     h.num_joints            = len(joints)
-    h.num_strings           = 0
+    h.num_strings           = len(strings)
     h.mesh_descs.offset     = ffi.sizeof("struct mdl_header")
     h.mesh_descs.size       = h.num_mesh_descs * ffi.sizeof("struct mdl_mesh_desc")
-    h.verts.offset          = h.mesh_descs.offset + h.mesh_descs.size;
+    h.verts.offset          = h.mesh_descs.offset + h.mesh_descs.size
     h.verts.size            = h.num_vertices * ffi.sizeof("struct mdl_vertex")
-    h.weights.offset        = h.verts.offset + h.verts.size;
+    h.weights.offset        = h.verts.offset + h.verts.size
     h.weights.size          = h.num_vertices * ffi.sizeof("struct mdl_vertex_weight") if h.flags.rigged else 0
     h.indices.offset        = h.weights.offset + h.weights.size
     h.indices.size          = h.num_indices * ffi.sizeof("u32")
@@ -225,6 +300,12 @@ def model_to_mdlfile(meshes, joints):
             mv.position = v.pos
             mv.normal   = v.nm
             mv.uv       = v.uv
+            if h.flags.rigged:
+                vw  = mesh.weights[j]
+                mvw = ffi.cast("struct mdl_vertex_weight*", (buf + h.weights.offset + md.ofs_weights)) + j
+                for k in range(4):
+                    mvw.blend_ids[k]     = vw.blend_ids[k]
+                    mvw.blend_weights[k] = vw.blend_weights[k]
 
         idxbuf = ffi.new("u32[]", mesh.indices)
         ffi.memmove(buf + h.indices.offset + md.ofs_indices, idxbuf, md.num_indices * ffi.sizeof("u32"))
@@ -247,6 +328,176 @@ def model_to_mdlfile(meshes, joints):
         ffi.memmove(buf + h.strings.offset, strings_buf, ffi.sizeof(strings_buf))
 
     return ffi.buffer(buf)
+
+def model_to_anmfile(joints, frames):
+    num_changes = 0
+    max_changes = len(frames) * len(joints)
+    changes = ffi.new("struct anm_change[]", max_changes)
+    fr_infos = ffi.new("struct anm_frame_info[]", len(frames))
+
+    prev_frame = copy.deepcopy(joints)
+    for i in range(len(frames)):
+        f = frames[i]
+        fi = fr_infos + i
+        for j in range(len(f)):
+            pfj = prev_frame[j]
+            cfj = f[j]
+            change = changes + num_changes
+            change.components = 0
+            if pfj.pos != cfj.pos:
+                change.components |= ANM_COMP_POSX
+                change.components |= ANM_COMP_POSY
+                change.components |= ANM_COMP_POSZ
+                change.pos = cfj.pos
+                pfj.pos    = cfj.pos
+            if pfj.rot != cfj.rot:
+                change.components |= ANM_COMP_ROTX
+                change.components |= ANM_COMP_ROTY
+                change.components |= ANM_COMP_ROTZ
+                change.components |= ANM_COMP_ROTW
+                change.rot = cfj.rot
+                pfj.rot    = cfj.rot
+            if pfj.scl != cfj.scl:
+                change.components |= ANM_COMP_SCLX
+                change.components |= ANM_COMP_SCLY
+                change.components |= ANM_COMP_SCLZ
+                change.scl = cfj.scl
+                pfj.scl    = cfj.scl
+            if change.components != 0:
+                num_changes += 1
+                fi.num_changes += 1
+                change.joint_idx = j
+    print("[+] - Num joints: {}".format(len(joints)))
+    print("[+] - Num frames: {}".format(len(frames)))
+    print("[+] - Num changes: {} (Max: {})".format(num_changes, max_changes))
+
+    h = ffi.new("struct anm_header*")
+    h.id                 = [0x41, 0x4E, 0x4D, 0x00]
+    h.ver                = [0, 1]
+    h.frame_rate         = 60
+    h.num_joints         = len(joints)
+    h.num_frames         = len(frames)
+    h.num_changes        = num_changes
+    h.joints             = [0, 0]
+    h.frame_infos        = [0, 0]
+    h.changes            = [0, 0]
+    h.joints.offset      = ffi.sizeof("struct anm_header")
+    h.joints.size        = h.num_joints * ffi.sizeof("struct anm_joint")
+    h.frame_infos.offset = h.joints.offset + h.joints.size
+    h.frame_infos.size   = h.num_frames * ffi.sizeof("struct anm_frame_info")
+    h.changes.offset     = h.frame_infos.offset + h.frame_infos.size
+    h.changes.size       = h.num_changes * ffi.sizeof("struct anm_change")
+
+    bytes_in_mb = 1024.0 * 1024.0
+    print("[+] - Size reduction: {} of {} MB".format(h.changes.size / bytes_in_mb, (max_changes * ffi.sizeof("struct anm_change")) / bytes_in_mb))
+    print("[+] - Compression Perc: {}%".format((num_changes/max_changes) * 100.0))
+
+    sz = h.changes.offset + h.changes.size
+    buf = ffi.new("byte[]", sz)
+    ffi.memmove(buf, h, ffi.sizeof("struct anm_header"))
+
+    for i in range(h.num_joints):
+        jnt = joints[i]
+        mj = ffi.cast("struct mdl_joint*", (buf + h.joints.offset)) + i
+        mj.position = jnt.pos
+        mj.rotation = jnt.rot
+        mj.scaling  = jnt.scl
+        mj.ref_parent = jnt.par_idx if jnt.par_idx != -1 else MDL_INVALID_OFFSET
+
+    ffi.memmove(buf + h.frame_infos.offset, fr_infos, h.num_frames * ffi.sizeof("struct anm_frame_info"))
+    ffi.memmove(buf + h.changes.offset, changes, h.num_changes * ffi.sizeof("struct anm_change"))
+
+    return ffi.buffer(buf)
+
+#----------------------------------------------------------------------
+# Blender data extraction
+#----------------------------------------------------------------------
+def quat_fmt(q):
+    return [q.x, q.y, q.z, q.w]
+
+def gather_meshes(selected_objects, joints):
+    meshes = []
+    mat_db = {}
+    for o in selected_objects:
+        if o.type == 'MESH':
+            print("[+] Processing {}".format(o.name))
+            # Create bmesh repr
+            bm = bmesh.new()
+            bm.from_mesh(o.data)
+            # Transform
+            #tmat = axis_conversion(to_forward='-Z', to_up='Y').to_4x4() * o.matrix_local
+            tmat = o.matrix_local
+            bm.transform(tmat)
+            if tmat.determinant() < 0.0:
+                bm.flip_normals() # If negative scaling, we have to invert the normals...
+            # Triangulate
+            bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method=0, ngon_method=0)
+            # Gather mesh data
+            mlist = Mesh.meshes_from_bmesh(bm, [j.name for j in joints], [vgrp.name for vgrp in o.vertex_groups])
+            # Reassign mat indexes
+            #for i in range(len(mlist)):
+            #    mesh = mlist[i]
+            #    mat  = o.material_slots[i].name
+            #    if mat in mat_db:
+            #        mesh.mat_index = mat_db[mat]
+            #    else:
+            #        nidx = len(mat_db)
+            #        mat_db[mat] = nidx
+            #        mesh.mat_index = nidx
+            meshes.extend(mlist)
+            # Free bmesh repr
+            bm.free()
+    return meshes
+
+def gather_joints(selected_objects):
+    joints = []
+    for o in selected_objects:
+        if o.type == 'ARMATURE':
+            print("[+] Joint group {} with {} bones".format(o.name, len(o.data.bones)))
+            # Should i use armature matrix as a root joint? (probably not)
+            #amat = o.matrix_local
+            #apos, arot, ascl = amat.decompose()
+            #joints.append(Joint(o.name, apos[:], quat_fmt(arot), ascl[:], -1))
+            for b in o.data.bones.values():
+                if b.parent:
+                    par_name = b.parent.name
+                    mat = b.parent.matrix_local.inverted() * b.matrix_local
+                else:
+                    par_name = None
+                    mat = b.matrix_local
+                pos, rot, scl = mat.decompose()
+                par_idx = next(i for i,j in enumerate(joints) if j.name == par_name) if par_name else -1
+                joints.append(Joint(b.name, pos[:], quat_fmt(rot), scl[:], par_idx))
+    return joints
+
+def gather_frames(selected_objects, joints, frame_range):
+    frames = []
+    if frame_range:
+        print("[+] Frameset with {} frames".format(frame_range[-1]))
+        scene = bpy.context.scene
+        jnt_name_idx = {joints[i].name: i for i in range(len(joints))}
+        for f in range(frame_range[0], frame_range[-1]):
+            scene.frame_set(f)
+            scene.update()
+            frame_joints = [None] * len(joints)
+            for o in selected_objects:
+                if o.type == 'ARMATURE':
+                    # Should i use armature matrix as a root joint? (probably not)
+                    #M = axis_conversion(from_forward='-Y', from_up='Z', to_forward='-Z', to_up='Y').to_4x4()
+                    #amat = o.matrix_local
+                    #apos, arot, ascl = amat.decompose()
+                    #frame_joints[jnt_name_idx[o.name]] = Joint(o.name, apos[:], quat_fmt(arot), ascl[:], -1)
+                    for name, b in o.pose.bones.items():
+                        jnt = joints[jnt_name_idx[name]]
+                        if b.parent:
+                            mat = b.parent.matrix.inverted() * b.matrix
+                        else:
+                            mat = b.matrix
+                        pos, rot, scl = mat.decompose()
+                        par_idx = joints[jnt_name_idx[name]].par_idx
+                        frame_joints[jnt_name_idx[name]] = Joint(b.name, pos[:], quat_fmt(rot), scl[:], par_idx)
+            frames.append(frame_joints)
+    return frames
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -279,59 +530,46 @@ def main():
     import_delta_time = datetime.now() - import_start_time
     print("[+] Total import time: {} secs".format(import_delta_time.total_seconds()))
 
-    # Processing
-    meshes = []
-    joints = []
-    mat_db = {}
-    for o in bpy.context.selected_objects:
-        if o.type == 'MESH':
-            print("[+] Processing {}".format(o.name))
-            # Create bmesh repr
-            bm = bmesh.new()
-            bm.from_mesh(o.data)
-            # Transform
-            #tmat = axis_conversion(to_forward='-Z', to_up='Y').to_4x4() * o.matrix_local
-            tmat = o.matrix_local
-            bm.transform(tmat)
-            if tmat.determinant() < 0.0:
-                bm.flip_normals() # If negative scaling, we have to invert the normals...
-            # Triangulate
-            bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method=0, ngon_method=0)
-            # Gather mesh data
-            mlist = Mesh.meshes_from_bmesh(bm)
-            # Reassign mat indexes
-            for i in range(len(mlist)):
-                mesh = mlist[i]
-                mat  = o.material_slots[i].name
-                if mat in mat_db:
-                    mesh.mat_index = mat_db[mat]
-                else:
-                    nidx = len(mat_db)
-                    mat_db[mat] = nidx
-                    mesh.mat_index = nidx
-            meshes.extend(mlist)
-            # Free bmesh repr
-            bm.free()
-        elif o.type == 'ARMATURE':
-            print("[+] Joint group {} with {} bones".format(o.name, len(o.pose.bones)))
-            quat_fmt = lambda q: [q.x, q.y, q.z, q.w]
-            joints.append(Joint(o.name, [0.0, 0.0, 0.0], quat_fmt(mathutils.Quaternion()), [1.0, 1.0, 1.0], -1))
-            bones = list(o.data.bones)
-            for b in bones:
-                par_name = b.parent.name if b.parent else o.name
-                par_idx = next(i for i,j in enumerate(joints) if j.name == par_name)
-                bon_mat = b.matrix_local
-                par_mat = mathutils.Matrix.Identity(4) if not b.parent else b.parent.matrix_local
-                mat = par_mat.inverted() * bon_mat
-                pos, rot, scl = mat.decompose()
-                j = Joint(b.name, pos[:], quat_fmt(rot), scl[:], par_idx)
-                joints.append(j)
+    # Selected objects
+    selected_objects = bpy.context.selected_objects
+
+    # Skeleton
+    joints = gather_joints(selected_objects)
+    # Reverse skeleton joint list
+    #joints.reverse()
+    #for j in joints:
+    #    if j.par_idx != -1:
+    #        j.par_idx = len(joints) - j.par_idx - 1
+
+    # Meshes
+    meshes = gather_meshes(selected_objects, joints)
 
     # Write output file
     fdata = model_to_mdlfile(meshes, joints)
     output_file = input_file + ".mdl"
     with open(output_file, "wb") as f:
         f.write(fdata)
+
+    # Frame range
+    frame_range = None
+    if bpy.data.actions:
+        frame_ranges = [action.frame_range for action in bpy.data.actions]
+        frames = (sorted(set([item for fr in frame_ranges for item in fr])))
+        if len(frames) >= 2:
+            frame_range = (int(frames[0]), int(frames[-1]))
+
+    # TODO: Export all actions
+    #object.animation_data.action = action
+
+    # Frameset
+    frames = gather_frames(selected_objects, joints, frame_range)
+
+    # Write output to file
+    if frames and len(frames) > 0:
+        fdata = model_to_anmfile(joints, frames)
+        output_file = input_file + ".anm"
+        with open(output_file, "wb") as f:
+            f.write(fdata)
 
 # Entrypoint
 if __name__ == '__main__':
