@@ -8,6 +8,7 @@ import os
 import io
 import argparse
 import copy
+import math
 import bpy
 import bmesh
 import mathutils
@@ -435,15 +436,15 @@ def gather_meshes(selected_objects, joints):
             # Gather mesh data
             mlist = Mesh.meshes_from_bmesh(bm, [j.name for j in joints], [vgrp.name for vgrp in o.vertex_groups])
             # Reassign mat indexes
-            #for i in range(len(mlist)):
-            #    mesh = mlist[i]
-            #    mat  = o.material_slots[i].name
-            #    if mat in mat_db:
-            #        mesh.mat_index = mat_db[mat]
-            #    else:
-            #        nidx = len(mat_db)
-            #        mat_db[mat] = nidx
-            #        mesh.mat_index = nidx
+            for i in range(len(mlist)):
+                mesh = mlist[i]
+                mat  = o.material_slots[i].name
+                if mat in mat_db:
+                    mesh.mat_index = mat_db[mat]
+                else:
+                    nidx = len(mat_db)
+                    mat_db[mat] = nidx
+                    mesh.mat_index = nidx
             meshes.extend(mlist)
             # Free bmesh repr
             bm.free()
@@ -454,10 +455,6 @@ def gather_joints(selected_objects):
     for o in selected_objects:
         if o.type == 'ARMATURE':
             print("[+] Joint group {} with {} bones".format(o.name, len(o.data.bones)))
-            # Should i use armature matrix as a root joint? (probably not)
-            #amat = o.matrix_local
-            #apos, arot, ascl = amat.decompose()
-            #joints.append(Joint(o.name, apos[:], quat_fmt(arot), ascl[:], -1))
             for b in o.data.bones.values():
                 if b.parent:
                     par_name = b.parent.name
@@ -482,17 +479,15 @@ def gather_frames(selected_objects, joints, frame_range):
             frame_joints = [None] * len(joints)
             for o in selected_objects:
                 if o.type == 'ARMATURE':
-                    # Should i use armature matrix as a root joint? (probably not)
-                    #M = axis_conversion(from_forward='-Y', from_up='Z', to_forward='-Z', to_up='Y').to_4x4()
-                    #amat = o.matrix_local
-                    #apos, arot, ascl = amat.decompose()
-                    #frame_joints[jnt_name_idx[o.name]] = Joint(o.name, apos[:], quat_fmt(arot), ascl[:], -1)
                     for name, b in o.pose.bones.items():
                         jnt = joints[jnt_name_idx[name]]
                         if b.parent:
                             mat = b.parent.matrix.inverted() * b.matrix
                         else:
-                            mat = b.matrix
+                            mtx4_x90 = mathutils.Matrix.Rotation(-math.pi / 2.0, 4, 'X')
+                            #M = axis_conversion(from_forward='-Y', from_up='Z', to_forward='Z', to_up='Y').to_4x4()
+                            correction_mat = mathutils.Matrix.Scale(100, 4) * mtx4_x90
+                            mat = correction_mat * o.matrix_world * b.matrix
                         pos, rot, scl = mat.decompose()
                         par_idx = joints[jnt_name_idx[name]].par_idx
                         frame_joints[jnt_name_idx[name]] = Joint(b.name, pos[:], quat_fmt(rot), scl[:], par_idx)
@@ -531,15 +526,11 @@ def main():
     print("[+] Total import time: {} secs".format(import_delta_time.total_seconds()))
 
     # Selected objects
-    selected_objects = bpy.context.selected_objects
+    selected_objects = [o for o in bpy.data.objects.values()]
+    selected_objects.reverse()
 
     # Skeleton
     joints = gather_joints(selected_objects)
-    # Reverse skeleton joint list
-    #joints.reverse()
-    #for j in joints:
-    #    if j.par_idx != -1:
-    #        j.par_idx = len(joints) - j.par_idx - 1
 
     # Meshes
     meshes = gather_meshes(selected_objects, joints)
