@@ -522,7 +522,7 @@ def main():
     import_start_time = datetime.now()
     ext = os.path.splitext(input_file)[1]
     if ext == ".fbx":
-        bpy.ops.import_scene.fbx(filepath=input_file, axis_up='-Y', use_manual_orientation=True, use_anim=True, use_prepost_rot=False)
+        bpy.ops.import_scene.fbx(filepath=input_file)
     elif ext == ".obj":
         stdout = io.StringIO()
         with redirect_stdout(stdout):
