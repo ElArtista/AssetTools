@@ -293,7 +293,7 @@ def model_to_mdlfile(meshes, joints):
         md.num_vertices = len(mesh.vertices)
         md.num_indices  = len(mesh.indices)
         md.ofs_verts    = vofs * ffi.sizeof("struct mdl_vertex")
-        md.ofs_weights  = vofs * ffi.sizeof("struct mdl_vertex_weight") if h.flags.rigged else MDL_INVALID_OFFSET
+        md.ofs_weights  = vofs * ffi.sizeof("struct mdl_vertex_weight") if len(mesh.weights) != 0 else MDL_INVALID_OFFSET
         md.ofs_indices  = iofs * ffi.sizeof("u32")
         md.mat_idx = mesh.mat_index
         for j in range(len(mesh.vertices)):
@@ -302,7 +302,7 @@ def model_to_mdlfile(meshes, joints):
             mv.position = v.pos
             mv.normal   = v.nm
             mv.uv       = v.uv
-            if h.flags.rigged:
+            if md.ofs_weights != MDL_INVALID_OFFSET:
                 vw  = mesh.weights[j]
                 mvw = ffi.cast("struct mdl_vertex_weight*", (buf + h.weights.offset + md.ofs_weights)) + j
                 for k in range(4):
