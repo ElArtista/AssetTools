@@ -6,6 +6,7 @@
 
 import os
 import io
+import sys
 import argparse
 import copy
 import math
@@ -497,7 +498,11 @@ def gather_frames(selected_objects, joints, frame_range):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", help="Model file to process")
-    return parser.parse_args()
+    if "--" not in sys.argv:
+        args = sys.argv[1:]
+    else:
+        args = sys.argv[sys.argv.index("--") + 1:]
+    return parser.parse_args(args)
 
 def main():
     # Handle arguments
