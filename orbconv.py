@@ -521,9 +521,9 @@ def main():
     print("[+] Importing asset...")
     import_start_time = datetime.now()
     ext = os.path.splitext(input_file)[1]
-    if ext == ".fbx":
+    if ext.lower() == ".fbx":
         bpy.ops.import_scene.fbx(filepath=input_file)
-    elif ext == ".obj":
+    elif ext.lower() == ".obj":
         stdout = io.StringIO()
         with redirect_stdout(stdout):
             bpy.ops.import_scene.obj(filepath=input_file)
