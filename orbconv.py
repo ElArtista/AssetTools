@@ -8,7 +8,6 @@ import os
 import io
 import sys
 import argparse
-import copy
 import math
 import bpy
 import bmesh
@@ -102,10 +101,10 @@ struct anm_header {
     f32 frame_rate;
     u16 num_joints;
     u16 num_frames;
-    u32 num_changes;
+    u32 num_values;
     data_chunk joints;
-    data_chunk frame_infos;
     data_chunk changes;
+    data_chunk values;
 };
 
 struct anm_joint {
@@ -113,18 +112,6 @@ struct anm_joint {
     f32 position[3];
     f32 rotation[4];
     f32 scaling[3];
-};
-
-struct anm_frame_info {
-    u16 num_changes;
-};
-
-struct anm_change {
-    u16 joint_idx;
-    u16 components;
-    f32 pos[3];
-    f32 rot[4];
-    f32 scl[3];
 };
 """)
 
@@ -332,69 +319,66 @@ def model_to_mdlfile(meshes, joints):
     return ffi.buffer(buf)
 
 def model_to_anmfile(joints, frames):
-    num_changes = 0
-    max_changes = len(frames) * len(joints)
-    changes = ffi.new("struct anm_change[]", max_changes)
-    fr_infos = ffi.new("struct anm_frame_info[]", len(frames))
+    num_values  = 0
+    num_changes = len(frames) * len(joints)
+    max_values  = len(frames) * len(joints) * 10 # 3 pos + 4 rot + 3 scl
+    changes = ffi.new("u16[]", num_changes)
+    values  = ffi.new("f32[]", max_values)
 
-    prev_frame = copy.deepcopy(joints)
+    prev_frame = [Joint(j.name, list(j.pos), list(j.rot), list(j.scl), j.par_idx) for j in joints]
+    cur_changes = 0
     for i in range(len(frames)):
         f = frames[i]
-        fi = fr_infos + i
         for j in range(len(f)):
             pfj = prev_frame[j]
             cfj = f[j]
-            change = changes + num_changes
-            change.components = 0
-            if pfj.pos != cfj.pos:
-                change.components |= ANM_COMP_POSX
-                change.components |= ANM_COMP_POSY
-                change.components |= ANM_COMP_POSZ
-                change.pos = cfj.pos
-                pfj.pos    = cfj.pos
-            if pfj.rot != cfj.rot:
-                change.components |= ANM_COMP_ROTX
-                change.components |= ANM_COMP_ROTY
-                change.components |= ANM_COMP_ROTZ
-                change.components |= ANM_COMP_ROTW
-                change.rot = cfj.rot
-                pfj.rot    = cfj.rot
-            if pfj.scl != cfj.scl:
-                change.components |= ANM_COMP_SCLX
-                change.components |= ANM_COMP_SCLY
-                change.components |= ANM_COMP_SCLZ
-                change.scl = cfj.scl
-                pfj.scl    = cfj.scl
-            if change.components != 0:
-                num_changes += 1
-                fi.num_changes += 1
-                change.joint_idx = j
+            components = 0
+            #eqf = lambda f1, f2: f1 == f2
+            eqf = lambda f1, f2: math.isclose(f1, f2, rel_tol=1e-05, abs_tol=1e-08)
+            for k in range(3):
+                pos_cmp = [ANM_COMP_POSX, ANM_COMP_POSY, ANM_COMP_POSZ]
+                if not eqf(pfj.pos[k], cfj.pos[k]):
+                    components         |= pos_cmp[k]
+                    values[num_values]  = pfj.pos[k] = cfj.pos[k]
+                    num_values         += 1
+            for k in range(4):
+                rot_cmp = [ANM_COMP_ROTX, ANM_COMP_ROTY, ANM_COMP_ROTZ, ANM_COMP_ROTW]
+                if not eqf(pfj.rot[k], cfj.rot[k]):
+                    components        |= rot_cmp[k]
+                    values[num_values] = pfj.rot[k] = cfj.rot[k]
+                    num_values        += 1
+            for k in range(3):
+                scl_cmp = [ANM_COMP_SCLX, ANM_COMP_SCLY, ANM_COMP_SCLZ]
+                if not eqf(pfj.scl[k], cfj.scl[k]):
+                    components        |= scl_cmp[k]
+                    values[num_values] = pfj.scl[k] = cfj.scl[k]
+                    num_values        += 1
+            changes[cur_changes] = components
+            cur_changes += 1
+
     print("[+] - Num joints: {}".format(len(joints)))
     print("[+] - Num frames: {}".format(len(frames)))
-    print("[+] - Num changes: {} (Max: {})".format(num_changes, max_changes))
+    print("[+] - Num values: {} (Max: {})".format(num_values, max_values))
 
     h = ffi.new("struct anm_header*")
-    h.id                 = [0x41, 0x4E, 0x4D, 0x00]
-    h.ver                = [0, 1]
-    h.frame_rate         = 60
-    h.num_joints         = len(joints)
-    h.num_frames         = len(frames)
-    h.num_changes        = num_changes
-    h.joints             = [0, 0]
-    h.frame_infos        = [0, 0]
-    h.changes            = [0, 0]
-    h.joints.offset      = ffi.sizeof("struct anm_header")
-    h.joints.size        = h.num_joints * ffi.sizeof("struct anm_joint")
-    h.frame_infos.offset = h.joints.offset + h.joints.size
-    h.frame_infos.size   = h.num_frames * ffi.sizeof("struct anm_frame_info")
-    h.changes.offset     = h.frame_infos.offset + h.frame_infos.size
-    h.changes.size       = h.num_changes * ffi.sizeof("struct anm_change")
+    h.id             = [0x41, 0x4E, 0x4D, 0x00]
+    h.ver            = [0, 1]
+    h.frame_rate     = 60
+    h.num_joints     = len(joints)
+    h.num_frames     = len(frames)
+    h.num_values     = num_values
+    h.joints.offset  = ffi.sizeof("struct anm_header")
+    h.joints.size    = h.num_joints * ffi.sizeof("struct anm_joint")
+    h.changes.offset = h.joints.offset + h.joints.size
+    h.changes.size   = h.num_frames * h.num_joints * ffi.sizeof("u16")
+    h.values.offset  = h.changes.offset + h.changes.size
+    h.values.size    = h.num_values * ffi.sizeof("f32")
 
     bytes_in_mb = 1024.0 * 1024.0
-    print("[+] - Size reduction: {} of {} MB".format(h.changes.size / bytes_in_mb, (max_changes * ffi.sizeof("struct anm_change")) / bytes_in_mb))
-    print("[+] - Compression Perc: {}%".format((num_changes/max_changes) * 100.0))
+    print("[+] - Size reduction: {} of {} MB".format(h.values.size / bytes_in_mb, (max_values * ffi.sizeof("f32")) / bytes_in_mb))
+    print("[+] - Compression Perc: {}%".format((num_values/max_values) * 100.0))
 
-    sz = h.changes.offset + h.changes.size
+    sz = h.values.offset + h.values.size
     buf = ffi.new("byte[]", sz)
     ffi.memmove(buf, h, ffi.sizeof("struct anm_header"))
 
@@ -406,8 +390,8 @@ def model_to_anmfile(joints, frames):
         mj.scaling  = jnt.scl
         mj.ref_parent = jnt.par_idx if jnt.par_idx != -1 else MDL_INVALID_OFFSET
 
-    ffi.memmove(buf + h.frame_infos.offset, fr_infos, h.num_frames * ffi.sizeof("struct anm_frame_info"))
-    ffi.memmove(buf + h.changes.offset, changes, h.num_changes * ffi.sizeof("struct anm_change"))
+    ffi.memmove(buf + h.changes.offset, changes, num_changes * ffi.sizeof("u16"))
+    ffi.memmove(buf + h.values.offset,  values,  num_values  * ffi.sizeof("f32"))
 
     return ffi.buffer(buf)
 
