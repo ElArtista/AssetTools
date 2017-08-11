@@ -197,11 +197,15 @@ class VertexWeight:
         self.blend_weights = blend_weights
 
 class Mesh:
-    def __init__(self, verts, weights, inds, mat_idx):
+    def __init__(self, name, verts, weights, inds, mat_idx):
+        self._name = name
         self._verts = verts
         self._weights = weights
         self._inds  = inds
         self._mat_index = mat_idx
+    @property
+    def name(self):
+        return self._name
     @property
     def vertices(self):
         return self._verts
@@ -218,7 +222,7 @@ class Mesh:
     def mat_index(self, mat_index):
         self._mat_index = mat_index
     @staticmethod
-    def meshes_from_bmesh(bm, jnt_names, vgrp_names):
+    def meshes_from_bmesh(bm, name, jnt_names, vgrp_names):
         meshes = []
         verts = []; weights = []; inds = []; vertex_db = {}
         mat_idx = 0
@@ -228,7 +232,7 @@ class Mesh:
         for f in facelist:
             if f.material_index != mat_idx:
                 # Flush mesh
-                meshes.append(Mesh(verts, weights, inds, mat_idx))
+                meshes.append(Mesh(name, verts, weights, inds, mat_idx))
                 mat_idx = f.material_index
                 verts = []; weights = []; inds = []; vertex_db = {}
             for loop in f.loops:
@@ -257,7 +261,7 @@ class Mesh:
                         vw = VertexWeight(blend_ids, blend_weights)
                         weights.append(vw)
 
-        meshes.append(Mesh(verts, weights, inds, mat_idx))
+        meshes.append(Mesh(name, verts, weights, inds, mat_idx))
         return meshes
 
 def model_to_mdlfile(meshes, joints):
@@ -308,10 +312,14 @@ def model_to_mdlfile(meshes, joints):
 
     # Create string offset buffer and string data buffer
     strings = ""
-    string_ofs = []
+    jname_string_ofs = []
     for j in joints:
-        string_ofs.append(len(strings))
+        jname_string_ofs.append(len(strings))
         strings += j.name + '\0'
+    mname_string_ofs = []
+    for m in meshes:
+        mname_string_ofs.append(len(strings))
+        strings += m.name + '\0'
 
     # Header
     h = ffi.new("struct mdl_header*")
@@ -349,7 +357,7 @@ def model_to_mdlfile(meshes, joints):
     for i in range(len(meshes)):
         mesh = meshes[i]
         md = ffi.cast("struct mdl_mesh_desc*", ffi.cast("size_t", (buf + h.mesh_descs.offset))) + i
-        md.ofs_name     = MDL_INVALID_OFFSET
+        md.ofs_name     = mname_string_ofs[i]
         md.num_vertices = len(mesh.vertices)
         md.num_indices  = len(mesh.indices)
         md.mat_idx = mesh.mat_index
@@ -383,8 +391,8 @@ def model_to_mdlfile(meshes, joints):
 
     # Populate strings section
     if h.strings.size != 0:
-        jname_buf = ffi.new("u32[]", string_ofs)
-        ffi.memmove(buf + h.joint_name_ofs.offset, jname_buf, len(string_ofs) * ffi.sizeof("u32"))
+        jname_buf = ffi.new("u32[]", jname_string_ofs)
+        ffi.memmove(buf + h.joint_name_ofs.offset, jname_buf, len(jname_string_ofs) * ffi.sizeof("u32"))
         strings_buf = ffi.new("byte[]", strings.encode('utf-8'))
         ffi.memmove(buf + h.strings.offset, strings_buf, ffi.sizeof(strings_buf))
 
@@ -491,7 +499,7 @@ def gather_meshes(selected_objects, joints):
             # Triangulate
             bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method=0, ngon_method=0)
             # Gather mesh data
-            mlist = Mesh.meshes_from_bmesh(bm, [j.name for j in joints], [vgrp.name for vgrp in o.vertex_groups])
+            mlist = Mesh.meshes_from_bmesh(bm, o.name, [j.name for j in joints], [vgrp.name for vgrp in o.vertex_groups])
             # Reassign mat indexes
             for i in range(len(mlist)):
                 mesh = mlist[i]
