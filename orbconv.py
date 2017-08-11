@@ -15,6 +15,7 @@ import mathutils
 
 from datetime import datetime
 from contextlib import redirect_stdout
+from enum import IntEnum
 from cffi import FFI
 from bpy_extras.io_utils import axis_conversion
 
@@ -52,12 +53,13 @@ struct mdl_header {
     } flags;
     u32 num_vertices;
     u32 num_indices;
-    u16 num_mesh_descs;
+    u32 num_mesh_descs;
+    u16 num_vertex_arrays;
     u16 num_joints;
     u32 num_strings;
     data_chunk mesh_descs;
-    data_chunk verts;
-    data_chunk weights;
+    data_chunk va_desc;
+    data_chunk va_data;
     data_chunk indices;
     data_chunk joints;
     data_chunk joint_name_ofs;
@@ -68,21 +70,15 @@ struct mdl_mesh_desc {
     u32 ofs_name;
     u32 num_vertices;
     u32 num_indices;
-    u32 ofs_verts;
-    u32 ofs_weights;
-    u32 ofs_indices;
     u16 mat_idx;
 };
 
-struct mdl_vertex {
-    f32 position[3];
-    f32 normal[3];
-    f32 uv[2];
-};
-
-struct mdl_vertex_weight {
-    u16 blend_ids[4];
-    f32 blend_weights[4];
+struct mdl_vertex_array {
+    u8 type;
+    u8 format;
+    u16 num_components;
+    u32 size;
+    u32 ofs_data;
 };
 
 struct mdl_joint {
@@ -116,6 +112,39 @@ struct anm_joint {
 """)
 
 MDL_INVALID_OFFSET = 0xFFFFFFFF
+
+class MDL_TYPE(IntEnum):
+    POSITION       = 0
+    NORMAL         = 1
+    TANGENT        = 2
+    TEXCOORD0      = 3
+    TEXCOORD1      = 4
+    BLEND_INDEXES  = 5
+    BLEND_WEIGHTS  = 6
+    CUSTOM         = 7
+
+class MDL_FORMAT(IntEnum):
+    BYTE   = 0
+    SHORT  = 1
+    USHORT = 2
+    INT    = 3
+    UINT   = 4
+    LONG   = 5
+    ULONG  = 6
+    FLOAT  = 7
+    DOUBLE = 8
+
+MDL_INTERNAL_FORMATS_MAPPING = {
+    "byte": MDL_FORMAT.BYTE,
+    "i16" : MDL_FORMAT.SHORT,
+    "u16" : MDL_FORMAT.USHORT,
+    "i32" : MDL_FORMAT.INT,
+    "u32" : MDL_FORMAT.UINT,
+    "i64" : MDL_FORMAT.LONG,
+    "u64" : MDL_FORMAT.ULONG,
+    "f32" : MDL_FORMAT.FLOAT,
+    "f64" : MDL_FORMAT.DOUBLE
+}
 
 ANM_COMP_UNKN = (1 << 0)
 ANM_COMP_POSX = (1 << 1)
@@ -232,75 +261,117 @@ class Mesh:
         return meshes
 
 def model_to_mdlfile(meshes, joints):
+    # Count total vertices and indices
     tot_verts = 0
     tot_inds  = 0
     for m in meshes:
         tot_verts += len(m.vertices)
         tot_inds  += len(m.indices)
 
+    # Flag if the current model is rigged
+    is_rigged = 1 if len(joints) != 0 else 0
+
+    # Vertex array types to be written
+    va_types = [MDL_TYPE.POSITION, MDL_TYPE.NORMAL, MDL_TYPE.TEXCOORD0]
+    if is_rigged:
+        va_types.extend([MDL_TYPE.BLEND_INDEXES, MDL_TYPE.BLEND_WEIGHTS])
+
+    # Mapping from vertex_array_type <-> pair(internal_element_type, element_count)
+    va_type_fmt_map = {
+        MDL_TYPE.POSITION      : ("f32", 3),
+        MDL_TYPE.NORMAL        : ("f32", 3),
+        MDL_TYPE.TEXCOORD0     : ("f32", 2),
+        MDL_TYPE.BLEND_INDEXES : ("u16", 4),
+        MDL_TYPE.BLEND_WEIGHTS : ("f32", 4)
+    }
+
+    # Deinterleave data
+    positions = []; normals = []; uvs = []; blend_ids = []; blend_weights = []
+    for m in meshes:
+        for j, v in enumerate(m.vertices):
+            positions.extend(v.pos)
+            normals.extend(v.nm)
+            uvs.extend(v.uv)
+            if is_rigged:
+                vw = m.weights[j]
+                blend_ids.extend(vw.blend_ids)
+                blend_weights.extend(vw.blend_weights)
+
+    # Map from vertex array type to its data buffer
+    va_bufs = {
+        MDL_TYPE.POSITION      : positions,
+        MDL_TYPE.NORMAL        : normals,
+        MDL_TYPE.TEXCOORD0     : uvs,
+        MDL_TYPE.BLEND_INDEXES : blend_ids,
+        MDL_TYPE.BLEND_WEIGHTS : blend_weights
+    }
+
+    # Create string offset buffer and string data buffer
     strings = ""
     string_ofs = []
     for j in joints:
         string_ofs.append(len(strings))
         strings += j.name + '\0'
 
+    # Header
     h = ffi.new("struct mdl_header*")
     h.id                    = [0x4D, 0x44, 0x4C, 0x00]
     h.ver                   = [0, 1]
-    h.flags                 = [1 if len(joints) != 0 else 0, 0]
+    h.flags                 = [is_rigged, 0]
     h.num_mesh_descs        = len(meshes)
+    h.num_vertex_arrays     = len(va_types)
     h.num_vertices          = tot_verts
     h.num_indices           = tot_inds
     h.num_joints            = len(joints)
     h.num_strings           = len(strings)
     h.mesh_descs.offset     = ffi.sizeof("struct mdl_header")
     h.mesh_descs.size       = h.num_mesh_descs * ffi.sizeof("struct mdl_mesh_desc")
-    h.verts.offset          = h.mesh_descs.offset + h.mesh_descs.size
-    h.verts.size            = h.num_vertices * ffi.sizeof("struct mdl_vertex")
-    h.weights.offset        = h.verts.offset + h.verts.size
-    h.weights.size          = h.num_vertices * ffi.sizeof("struct mdl_vertex_weight") if h.flags.rigged else 0
-    h.indices.offset        = h.weights.offset + h.weights.size
+    h.va_desc.offset        = h.mesh_descs.offset + h.mesh_descs.size
+    h.va_desc.size          = h.num_vertex_arrays * ffi.sizeof("struct mdl_vertex_array")
+    h.va_data.offset        = h.va_desc.offset + h.va_desc.size
+    h.va_data.size          = sum([ffi.sizeof(f) * c * tot_verts for f, c in [va_type_fmt_map[vat] for vat in va_types]])
+    h.indices.offset        = h.va_data.offset + h.va_data.size
     h.indices.size          = h.num_indices * ffi.sizeof("u32")
     h.joints.offset         = h.indices.offset + h.indices.size
     h.joints.size           = h.num_joints * ffi.sizeof("struct mdl_joint")
     h.joint_name_ofs.offset = h.joints.offset + h.joints.size
     h.joint_name_ofs.size   = h.num_joints * ffi.sizeof("u32")
     h.strings.offset        = h.joint_name_ofs.offset + h.joint_name_ofs.size
-    h.strings.size          = len(strings)
+    h.strings.size          = len(strings) + 1
 
+    # Allocate file data buffer and copy header
     sz = h.strings.offset + h.strings.size
     buf = ffi.new("byte[]", sz)
     ffi.memmove(buf, h, ffi.sizeof("struct mdl_header"))
 
-    vofs = 0; iofs = 0
+    # Populate mesh description section
+    iofs = 0
     for i in range(len(meshes)):
         mesh = meshes[i]
         md = ffi.cast("struct mdl_mesh_desc*", ffi.cast("size_t", (buf + h.mesh_descs.offset))) + i
         md.ofs_name     = MDL_INVALID_OFFSET
         md.num_vertices = len(mesh.vertices)
         md.num_indices  = len(mesh.indices)
-        md.ofs_verts    = vofs * ffi.sizeof("struct mdl_vertex")
-        md.ofs_weights  = vofs * ffi.sizeof("struct mdl_vertex_weight") if len(mesh.weights) != 0 else MDL_INVALID_OFFSET
-        md.ofs_indices  = iofs * ffi.sizeof("u32")
         md.mat_idx = mesh.mat_index
-        for j in range(len(mesh.vertices)):
-            mv = ffi.cast("struct mdl_vertex*", (buf + h.verts.offset + md.ofs_verts)) + j
-            v = mesh.vertices[j]
-            mv.position = v.pos
-            mv.normal   = v.nm
-            mv.uv       = v.uv
-            if md.ofs_weights != MDL_INVALID_OFFSET:
-                vw  = mesh.weights[j]
-                mvw = ffi.cast("struct mdl_vertex_weight*", (buf + h.weights.offset + md.ofs_weights)) + j
-                for k in range(4):
-                    mvw.blend_ids[k]     = vw.blend_ids[k]
-                    mvw.blend_weights[k] = vw.blend_weights[k]
-
         idxbuf = ffi.new("u32[]", mesh.indices)
-        ffi.memmove(buf + h.indices.offset + md.ofs_indices, idxbuf, md.num_indices * ffi.sizeof("u32"))
-        vofs += md.num_vertices
+        ffi.memmove(buf + h.indices.offset + iofs * ffi.sizeof("u32"), idxbuf, md.num_indices * ffi.sizeof("u32"))
         iofs += md.num_indices
 
+    # Populate vertex arrays section
+    va_offs = 0
+    for i, va_type in enumerate(va_types):
+        va = ffi.cast("struct mdl_vertex_array*", buf + h.va_desc.offset) + i
+        f, c = va_type_fmt_map[va_type]
+        va_sz = tot_verts * ffi.sizeof(f) * c
+        va.type           = va_type
+        va.format         = MDL_INTERNAL_FORMATS_MAPPING[f]
+        va.num_components = c
+        va.ofs_data       = va_offs
+        cbuf = ffi.new(f+"[]", va_bufs[va_type])
+        ffi.memmove(buf + h.va_data.offset + va.ofs_data, cbuf, va_sz)
+        va_offs += va_sz
+
+    # Populate joints section
     if h.flags.rigged:
         for i in range(h.num_joints):
             jnt = joints[i]
@@ -310,10 +381,11 @@ def model_to_mdlfile(meshes, joints):
             mj.scaling  = jnt.scl
             mj.ref_parent = jnt.par_idx if jnt.par_idx != -1 else MDL_INVALID_OFFSET
 
+    # Populate strings section
     if h.strings.size != 0:
         jname_buf = ffi.new("u32[]", string_ofs)
         ffi.memmove(buf + h.joint_name_ofs.offset, jname_buf, len(string_ofs) * ffi.sizeof("u32"))
-        strings_buf = ffi.new("char[]", strings.encode('utf-8'))
+        strings_buf = ffi.new("byte[]", strings.encode('utf-8'))
         ffi.memmove(buf + h.strings.offset, strings_buf, ffi.sizeof(strings_buf))
 
     return ffi.buffer(buf)
