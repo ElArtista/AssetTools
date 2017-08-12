@@ -605,10 +605,12 @@ def main():
     meshes = gather_meshes(selected_objects, joints)
 
     # Write output file
-    fdata = model_to_mdlfile(meshes, joints)
-    output_file = input_file + ".mdl"
-    with open(output_file, "wb") as f:
-        f.write(fdata)
+    if len(meshes) > 0:
+        fdata = model_to_mdlfile(meshes, joints)
+        output_file = input_file + ".mdl"
+        print("[+] Writting model file {}".format(output_file))
+        with open(output_file, "wb") as f:
+            f.write(fdata)
 
     # Frame range
     frame_range = None
@@ -628,6 +630,7 @@ def main():
     if frames and len(frames) > 0:
         fdata = model_to_anmfile(joints, frames)
         output_file = input_file + ".anm"
+        print("[+] Writting animation file {}".format(output_file))
         with open(output_file, "wb") as f:
             f.write(fdata)
 
