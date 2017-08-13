@@ -535,10 +535,10 @@ def gather_joints(selected_objects):
 def gather_frames(selected_objects, joints, frame_range):
     frames = []
     if frame_range:
-        print("[+] Frameset with {} frames".format(frame_range[-1]))
+        print("[+] Frameset with {} frames".format(frame_range[-1] - frame_range[0] + 1))
         scene = bpy.context.scene
         jnt_name_idx = {joints[i].name: i for i in range(len(joints))}
-        for f in range(frame_range[0], frame_range[-1]):
+        for f in range(frame_range[0], frame_range[-1] + 1):
             scene.frame_set(f)
             scene.update()
             frame_joints = [None] * len(joints)
