@@ -359,13 +359,13 @@ def data_cleanup(data):
 
 def construct_json_output(assetmap):
     data = {}
-    data["materials"] = assetmap["material"]
-    data["textures"] = assetmap["texture"]
     data["models"] = assetmap["model"]
+    data["textures"] = assetmap["texture"]
+    data["materials"] = assetmap["material"]
     data["prefabs"] = assetmap["prefab"]
     data["scenes"] = assetmap["scene"]
     data_cleanup(data)
-    return json.dumps(data, indent=4, sort_keys=True)
+    return json.dumps(data, indent=4, sort_keys=False)
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
