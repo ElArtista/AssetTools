@@ -337,6 +337,11 @@ def data_cleanup(data):
                             obj_mats.remove(mat)
     # Bake model scales in transform attributes
     for scene in data["scenes"].values():
+        # Apply scaling in root objects
+        root_objs = [obj for obj in scene["objects"].values() if "parent" not in obj["transform"]]
+        for ro in root_objs:
+            for i in range(3):
+                ro["transform"]["scale"][i] *= 0.01
         for scn_obj in scene["objects"].values():
             for i in range(3):
                 scn_obj["transform"]["position"][i] *= 100
