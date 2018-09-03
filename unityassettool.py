@@ -110,10 +110,11 @@ def mat_from_file(f):
             tex_nodes = list(metadicts)[0]["Material"]["m_SavedProperties"]["m_TexEnvs"]
             mat = {}
             for tn in tex_nodes:
-                if tn["second"]["m_Texture"]["fileID"] != 0:
-                    tex_type = tn["first"]["name"][1:]
-                    tex_guid = tn["second"]["m_Texture"]["guid"]
-                    tex_scal = tn["second"]["m_Scale"]
+                (k, v), = tn.items()
+                if v["m_Texture"]["fileID"] != 0:
+                    tex_type = k[1:]
+                    tex_guid = v["m_Texture"]["guid"]
+                    tex_scal = v["m_Scale"]
                     mat[tex_type] = {"texture": tex_guid, "scale": [tex_scal["x"], tex_scal["y"]]}
             return mat
     return None
@@ -147,9 +148,9 @@ def game_objects_from_docs(docs, prefabs=None):
             obj = {}
             obj["name"] = go["m_Name"]
             # Populate from prefab
-            if go["m_PrefabParentObject"]["fileID"] != 0 and prefabs:
-                prfb_guid = go["m_PrefabParentObject"]["guid"]
-                prfb_fid  = go["m_PrefabParentObject"]["fileID"]
+            if go["m_CorrespondingSourceObject"]["fileID"] != 0 and prefabs:
+                prfb_guid = go["m_CorrespondingSourceObject"]["guid"]
+                prfb_fid  = go["m_CorrespondingSourceObject"]["fileID"]
                 if prfb_guid in prefabs and prfb_fid in prefabs[prfb_guid]:
                     prfb = prefabs[prfb_guid]
                     game_object_from_prefab(obj, prfb[prfb_fid])
