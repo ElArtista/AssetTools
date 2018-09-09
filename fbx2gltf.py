@@ -96,6 +96,7 @@ def main():
     bpy.ops.export_scene.gltf(
         filepath=output_file,
         check_existing=True,
+        export_copyright="",
         export_embed_buffers=False,
         export_embed_images=False,
         export_strip=False,
@@ -115,6 +116,7 @@ def main():
         export_apply=False,
         export_animations=True,
         export_frame_range=True,
+        export_frame_step=1,
         export_move_keyframes=True,
         export_force_sampling=False,
         export_current_frame=True,
@@ -123,9 +125,9 @@ def main():
         export_morph=True,
         export_morph_normal=True,
         export_morph_tangent=True,
-        export_lights_pbr=False,
-        export_lights_cmn=False,
+        export_lights=False,
         export_displacement=False,
+        will_save_settings=False,
         filter_glob="*.gltf")
 
     print("[+] Done.")
